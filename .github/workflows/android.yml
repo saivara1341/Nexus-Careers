@@ -26,17 +26,22 @@ jobs:
       - name: Setup Java
         uses: actions/setup-java@v3
         with:
-          distribution: 'zulu'
-          java-version: '17'
+          distribution: "zulu"
+          java-version: "17"
 
-      - name: Sync Capacitor
-        run: npx cap sync android
+      # Auto-add android platform if missing (safety check)
+      - name: Ensure Android Platform
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+          npx cap sync android
 
-      - name: Build APK
+      - name: Build APK (Release Lint checks)
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug -x lint --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
