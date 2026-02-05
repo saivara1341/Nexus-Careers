@@ -29,9 +29,9 @@ if %ERRORLEVEL% NEQ 0 (
     echo [X] BUILD FAILED!
     echo.
     echo Common fixes:
-    echo 1. Ensure Java (JDK 17 or higher) is installed and JAVA_HOME is set.
+    echo 1. Ensure Java [JDK 17 or higher] is installed and JAVA_HOME is set.
     echo 2. Ensure Android SDK is installed.
-    echo 3. Check your internet connection (Gradle needs to download dependencies).
+    echo 3. Check your internet connection [Gradle needs to download dependencies].
     echo.
     echo Error details should be above.
     pause
