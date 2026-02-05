@@ -1,0 +1,17 @@
+
+# supabase/config.toml
+
+# The `public` schema is exposed by default.
+# You can add other schemas to expose them or configure access control.
+# See https://supabase.com/docs/guides/api/generating-types#additional-schemas
+# schemas = []
+
+# List of environment variables that are exposed to the edge functions
+# and also used in the locally emulated environment.
+# Learn more about env variables: https://supabase.com/docs/guides/functions/secrets
+
+[functions.ai-handler]
+# Path to the file that contains your Edge Function code
+verify_jwt = false
+
+

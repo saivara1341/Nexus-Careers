@@ -1,0 +1,9 @@
+{
+  "name": "Nexus Careers - AI Placement & Mentorship Platform",
+  "description": "A futuristic, AI-powered platform for college students and administrators to manage placements, opportunities, and mentorship. Features include AI-driven data management, a gamified student experience, and an AI career toolkit.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera",
+    "geolocation"
+  ]
+}
