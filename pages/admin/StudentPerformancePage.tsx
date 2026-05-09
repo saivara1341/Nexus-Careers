@@ -7,13 +7,14 @@ import type { AdminProfile, Department, AdminRole, StudentProfile, StudentCertif
 import { UNIVERSITY_LEVEL_ROLES } from '../../types.ts';
 import { Card } from '../../components/ui/Card.tsx';
 import { Button } from '../../components/ui/Button.tsx';
+import { Input } from '../../components/ui/Input.tsx';
 import { Spinner } from '../../components/ui/Spinner.tsx';
 import { Pagination } from '../../components/ui/Pagination.tsx';
 import { MarkdownRenderer } from '../../components/ai/MarkdownRenderer.tsx';
 import { Modal } from '../../components/ui/Modal.tsx';
 import toast from 'react-hot-toast';
 import { handleAiInvocationError } from '../../utils/errorHandlers.ts';
-import * as XLSX from 'xlsx';
+import { downloadCsv } from '../../utils/csv.ts';
 import { runAI } from '../../services/aiClient.ts';
 
 interface StudentPerformanceData extends StudentProfile {
@@ -21,6 +22,9 @@ interface StudentPerformanceData extends StudentProfile {
     performance_status: 'High' | 'Moderate' | 'Low' | 'Poor';
     application_count: number;
     offers_count: number;
+    placed_companies: string[];
+    highest_package_lpa: number | null;
+    latest_placement_title?: string;
 }
 
 const PAGE_SIZE = 20;
@@ -40,11 +44,15 @@ const CopyButton: React.FC<{ text: string }> = ({ text }) => {
 };
 
 const fetchDepartments = async (supabase: any, college: string) => {
-    const { data } = await supabase.from('departments').select('id, name').eq('college_name', college);
+    const { data, error } = await supabase.from('departments').select('id, name').eq('college_name', college);
+    if (error) {
+        if (error.code === '42P01' || error.message?.includes('does not exist')) return [];
+        throw error;
+    }
     return data || [];
 };
 
-const fetchStudentsForPerformance = async (supabase: any, user: AdminProfile, page: number, department: string, passoutYear: string) => {
+const fetchStudentsForPerformance = async (supabase: any, user: AdminProfile, page: number, department: string, passoutYear: string, searchTerm: string, placementFilter: string) => {
     const from = (page - 1) * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
 
@@ -56,6 +64,10 @@ const fetchStudentsForPerformance = async (supabase: any, user: AdminProfile, pa
 
     if (department !== 'all') query = query.eq('department', department);
     if (passoutYear !== 'all') query = query.eq('ug_passout_year', parseInt(passoutYear));
+    if (searchTerm.trim()) {
+        const safeSearch = searchTerm.trim().replace(/[%(),]/g, '');
+        query = query.or(`name.ilike.%${safeSearch}%,roll_number.ilike.%${safeSearch}%,email.ilike.%${safeSearch}%`);
+    }
 
     // FIX: Default order to roll_number instead of name to maintain logical numerical sequence
     const { data: registryData, error, count } = await query.order('roll_number', { ascending: true }).range(from, to);
@@ -83,21 +95,44 @@ const fetchStudentsForPerformance = async (supabase: any, user: AdminProfile, pa
     }
 
     // 3. Fetch Application Counts for Active Students
-    let appCounts = new Map<string, number>();
-    let offerCounts = new Map<string, number>();
+    let appMetrics = new Map<string, {
+        applications: number;
+        offers: number;
+        companies: Set<string>;
+        highestPackage: number | null;
+        latestTitle?: string;
+        latestPlacementAt?: string;
+    }>();
 
     if (activeIds.length > 0) {
         const { data: apps } = await supabase
             .from('applications')
-            .select('student_id, status')
+            .select('student_id, status, created_at, opportunity:opportunities!applications_opportunity_id_fkey(title, company, package_lpa)')
             .in('student_id', activeIds);
 
         if (apps) {
             apps.forEach((a: any) => {
-                appCounts.set(a.student_id, (appCounts.get(a.student_id) || 0) + 1);
+                const current = appMetrics.get(a.student_id) || {
+                    applications: 0,
+                    offers: 0,
+                    companies: new Set<string>(),
+                    highestPackage: null,
+                };
+                current.applications += 1;
+
                 if (['offered', 'hired'].includes(a.status)) {
-                    offerCounts.set(a.student_id, (offerCounts.get(a.student_id) || 0) + 1);
+                    current.offers += 1;
+                    if (a.opportunity?.company) current.companies.add(a.opportunity.company);
+                    if (typeof a.opportunity?.package_lpa === 'number') {
+                        current.highestPackage = Math.max(current.highestPackage || 0, a.opportunity.package_lpa);
+                    }
+                    if (!current.latestPlacementAt || new Date(a.created_at) > new Date(current.latestPlacementAt)) {
+                        current.latestPlacementAt = a.created_at;
+                        current.latestTitle = a.opportunity?.title;
+                    }
                 }
+
+                appMetrics.set(a.student_id, current);
             });
         }
     }
@@ -106,6 +141,7 @@ const fetchStudentsForPerformance = async (supabase: any, user: AdminProfile, pa
     const studentsWithMetrics = registryData.map((regStudent: any) => {
         const activeData = activeMap.get(regStudent.email);
         const activeId = activeData?.id;
+        const placementMetrics = activeId ? appMetrics.get(activeId) : null;
 
         const cgpa = regStudent.ug_cgpa || 0;
         const backlogs = regStudent.backlogs || 0;
@@ -130,12 +166,23 @@ const fetchStudentsForPerformance = async (supabase: any, user: AdminProfile, pa
             level: activeData?.level || 1,
             detention_risk: risk,
             performance_status: perf,
-            application_count: activeId ? (appCounts.get(activeId) || 0) : 0,
-            offers_count: activeId ? (offerCounts.get(activeId) || 0) : 0
+            application_count: placementMetrics?.applications || 0,
+            offers_count: placementMetrics?.offers || 0,
+            placed_companies: placementMetrics ? Array.from(placementMetrics.companies) : [],
+            highest_package_lpa: placementMetrics?.highestPackage || null,
+            latest_placement_title: placementMetrics?.latestTitle
         };
     });
 
-    return { data: studentsWithMetrics as StudentPerformanceData[], count: count || 0 };
+    const filteredStudents = studentsWithMetrics.filter(student => {
+        if (placementFilter === 'applied') return student.application_count > 0;
+        if (placementFilter === 'placed') return student.offers_count > 0;
+        if (placementFilter === 'not_placed') return student.offers_count === 0;
+        if (placementFilter === 'no_applications') return student.application_count === 0;
+        return true;
+    });
+
+    return { data: filteredStudents as StudentPerformanceData[], count: count || 0 };
 };
 
 const generateAIDetentionReport = async (supabase: any, students: StudentPerformanceData[], department: string, viewMode: 'academic' | 'placement') => {
@@ -169,11 +216,23 @@ const StudentPerformancePage: React.FC<StudentPerformancePageProps> = ({ user })
 
     const [filterDepartment, setFilterDepartment] = useState<string | 'all'>(user.department || 'all');
     const [filterPassoutYear, setFilterPassoutYear] = useState<string | 'all'>('all');
+    const [searchTerm, setSearchTerm] = useState('');
+    const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
+    const [placementFilter, setPlacementFilter] = useState<'all' | 'applied' | 'placed' | 'not_placed' | 'no_applications'>('all');
     const [aiReport, setAiReport] = useState<string | null>(null);
 
     const [viewMode, setViewMode] = useState<'academic' | 'placement'>('academic');
     const [selectedStudent, setSelectedStudent] = useState<StudentPerformanceData | null>(null);
     const [isModalOpen, setIsModalOpen] = useState(false);
+
+    useEffect(() => {
+        const timer = setTimeout(() => setDebouncedSearchTerm(searchTerm), 300);
+        return () => clearTimeout(timer);
+    }, [searchTerm]);
+
+    useEffect(() => {
+        setPage(1);
+    }, [filterDepartment, filterPassoutYear, debouncedSearchTerm, placementFilter]);
 
     const { data: departments = [], isLoading: isLoadingDepartments } = useQuery<Department[]>({
         queryKey: ['departments', user.college],
@@ -182,21 +241,29 @@ const StudentPerformancePage: React.FC<StudentPerformancePageProps> = ({ user })
     });
 
     const { data: studentsData, isLoading: isLoadingStudents, isError, error } = useQuery<{ data: StudentPerformanceData[]; count: number }, Error>({
-        queryKey: ['studentPerformance', user.college, filterDepartment, filterPassoutYear, page],
+        queryKey: ['studentPerformance', user.college, filterDepartment, filterPassoutYear, debouncedSearchTerm, placementFilter, page],
         queryFn: async () => {
             try {
-                return await fetchStudentsForPerformance(supabase, user, page, filterDepartment, filterPassoutYear);
+                return await fetchStudentsForPerformance(supabase, user, page, filterDepartment, filterPassoutYear, debouncedSearchTerm, placementFilter);
             } catch (err: any) {
                 const errorMessage = handleAiInvocationError(err);
                 throw new Error(errorMessage);
             }
         },
         placeholderData: (previousData) => previousData,
+        retry: false,
     });
 
     const students = studentsData?.data ?? [];
     const count = studentsData?.count ?? 0;
     const totalPages = Math.ceil(count / PAGE_SIZE);
+    const visibleApplied = students.reduce((acc, s) => acc + (s.application_count || 0), 0);
+    const visiblePlaced = students.filter(s => s.offers_count > 0).length;
+    const visibleAvgPackage = (() => {
+        const packages = students.map(s => s.highest_package_lpa).filter((pkg): pkg is number => typeof pkg === 'number' && pkg > 0);
+        if (!packages.length) return null;
+        return packages.reduce((acc, pkg) => acc + pkg, 0) / packages.length;
+    })();
 
     const detentionReportMutation = useMutation<string, Error, void>({
         mutationFn: async () => {
@@ -232,14 +299,14 @@ const StudentPerformancePage: React.FC<StudentPerformancePageProps> = ({ user })
             'Risk Level': s.detention_risk,
             'Applications': s.application_count,
             'Offers': s.offers_count,
+            'Placed Company': s.placed_companies.join('; ') || 'N/A',
+            'Highest Package LPA': s.highest_package_lpa ?? 'N/A',
+            'Placement Role': s.latest_placement_title || 'N/A',
             'XP Points': s.xp,
             'Batch': s.ug_passout_year
         }));
 
-        const ws = XLSX.utils.json_to_sheet(exportData);
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, `Performance_${viewMode}`);
-        XLSX.writeFile(wb, `Student_Performance_${user.college}_${viewMode}.xlsx`);
+        downloadCsv(exportData, `Student_Performance_${user.college}_${viewMode}.csv`);
         toast.success("Export successful!");
     };
 
@@ -266,14 +333,18 @@ const StudentPerformancePage: React.FC<StudentPerformancePageProps> = ({ user })
                 <h1 className="font-display text-2xl md:text-3xl font-bold uppercase mb-2 text-primary">
                     Student Intelligence
                 </h1>
-                <p className="text-text-muted text-sm font-mono max-w-2xl italic">
-                    Comprehensive performance tracking, risk assessment, and identity management.
-                </p>
+                <p className="text-text-muted text-sm">Track performance, eligibility, and placement outcomes.</p>
             </header>
 
             <Card glow="none" className="mb-6">
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 flex-1">
+                <div className="flex flex-col gap-4">
+                    <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+                        <Input
+                            label="Search"
+                            placeholder="Name, roll number, or email"
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                        />
                         {isUniversityLevelAdmin && (
                             <div>
                                 <label className="block text-primary font-display text-lg mb-2">Department</label>
@@ -302,9 +373,42 @@ const StudentPerformancePage: React.FC<StudentPerformancePageProps> = ({ user })
                                 {passoutYears.map(year => <option key={year} value={year}>{year}</option>)}
                             </select>
                         </div>
+                        <div>
+                            <label className="block text-primary font-display text-lg mb-2">Placement</label>
+                            <select
+                                value={placementFilter}
+                                onChange={(e) => setPlacementFilter(e.target.value as any)}
+                                className="w-full bg-input-bg border-2 border-primary/50 rounded-md p-3 text-lg text-text-base"
+                            >
+                                <option value="all">All Students</option>
+                                <option value="applied">Applied At Least Once</option>
+                                <option value="placed">Placed / Offered</option>
+                                <option value="not_placed">Not Placed</option>
+                                <option value="no_applications">No Applications</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
             </Card>
+
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                <Card glow="none" className="p-4 border-white/10">
+                    <p className="text-[10px] uppercase tracking-widest text-text-muted font-bold">Registry Matches</p>
+                    <p className="text-3xl font-display text-primary mt-2">{count.toLocaleString()}</p>
+                </Card>
+                <Card glow="none" className="p-4 border-white/10">
+                    <p className="text-[10px] uppercase tracking-widest text-text-muted font-bold">Visible Applications</p>
+                    <p className="text-3xl font-display text-secondary mt-2">{visibleApplied.toLocaleString()}</p>
+                </Card>
+                <Card glow="none" className="p-4 border-white/10">
+                    <p className="text-[10px] uppercase tracking-widest text-text-muted font-bold">Visible Placed</p>
+                    <p className="text-3xl font-display text-green-400 mt-2">{visiblePlaced.toLocaleString()}</p>
+                </Card>
+                <Card glow="none" className="p-4 border-white/10">
+                    <p className="text-[10px] uppercase tracking-widest text-text-muted font-bold">Avg Package</p>
+                    <p className="text-3xl font-display text-primary mt-2">{visibleAvgPackage ? `${visibleAvgPackage.toFixed(1)} LPA` : 'N/A'}</p>
+                </Card>
+            </div>
 
             <div className="flex flex-col sm:flex-row justify-between sm:items-center mb-6 gap-4">
                 <div className="flex bg-card-bg/50 p-1 rounded-lg border border-primary/20">
@@ -347,9 +451,9 @@ const StudentPerformancePage: React.FC<StudentPerformancePageProps> = ({ user })
                                         ) : (
                                             <>
                                                 <th className="p-3 text-center">Registered</th>
-                                                <th className="p-3 text-center">Placed In</th>
-                                                <th className="p-3 text-center">XP Points</th>
-                                                <th className="p-3 text-center">CGPA</th>
+                                                <th className="p-3 text-center">Placed</th>
+                                                <th className="p-3">Company</th>
+                                                <th className="p-3 text-center">Package</th>
                                             </>
                                         )}
                                     </tr>
@@ -384,11 +488,11 @@ const StudentPerformancePage: React.FC<StudentPerformancePageProps> = ({ user })
                                                     <td className="p-3 text-center">
                                                         <span className="text-green-400 font-bold">{student.offers_count}</span>
                                                     </td>
-                                                    <td className="p-3 text-center text-secondary font-bold">
-                                                        {student.xp}
+                                                    <td className="p-3 text-sm">
+                                                        {student.placed_companies.length ? student.placed_companies.join(', ') : <span className="text-text-muted">Not placed</span>}
                                                     </td>
-                                                    <td className="p-3 text-center text-text-muted">
-                                                        {student.ug_cgpa?.toFixed(2)}
+                                                    <td className="p-3 text-center text-green-400 font-bold">
+                                                        {student.highest_package_lpa ? `${student.highest_package_lpa} LPA` : '-'}
                                                     </td>
                                                 </>
                                             )}
@@ -426,6 +530,7 @@ const PerformanceStudentDetailModal: React.FC<{ isOpen: boolean, onClose: () => 
         queryKey: ['studentCertifications', student.id],
         queryFn: async () => {
             const { data, error } = await supabase.from('student_certifications').select('*').eq('student_id', student.id);
+            if (error?.code === '42P01') return [];
             if (error) throw error;
             return data || [];
         },
@@ -435,6 +540,7 @@ const PerformanceStudentDetailModal: React.FC<{ isOpen: boolean, onClose: () => 
         queryKey: ['studentAchievements', student.id],
         queryFn: async () => {
             const { data, error } = await supabase.from('student_achievements').select('*').eq('student_id', student.id);
+            if (error?.code === '42P01') return [];
             if (error) throw error;
             return data || [];
         },
@@ -474,6 +580,9 @@ const PerformanceStudentDetailModal: React.FC<{ isOpen: boolean, onClose: () => 
                         <div className="flex justify-between"><span className="text-text-muted">Performance:</span> <span className="font-bold">{student.performance_status}</span></div>
                         <div className="flex justify-between"><span className="text-text-muted">Registered Apps:</span> <span>{student.application_count}</span></div>
                         <div className="flex justify-between"><span className="text-text-muted">Placed In:</span> <span className="text-green-400">{student.offers_count}</span></div>
+                        <div className="flex justify-between gap-4"><span className="text-text-muted">Company:</span> <span className="text-right">{student.placed_companies.length ? student.placed_companies.join(', ') : 'N/A'}</span></div>
+                        <div className="flex justify-between"><span className="text-text-muted">Package:</span> <span className="text-green-400 font-bold">{student.highest_package_lpa ? `${student.highest_package_lpa} LPA` : 'N/A'}</span></div>
+                        <div className="flex justify-between gap-4"><span className="text-text-muted">Role:</span> <span className="text-right">{student.latest_placement_title || 'N/A'}</span></div>
                         <div className="flex justify-between"><span className="text-text-muted">XP Points:</span> <span className="text-secondary">{student.xp}</span></div>
                         <div className="flex justify-between"><span className="text-text-muted">Level:</span> <span>{student.level}</span></div>
                     </div>

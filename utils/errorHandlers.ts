@@ -1,5 +1,8 @@
 import toast from 'react-hot-toast';
 
+const recentErrorToasts = new Map<string, number>();
+const ERROR_TOAST_DEDUP_MS = 6000;
+
 /**
  * Centralized function to handle AI and Supabase invocation errors.
  */
@@ -29,9 +32,9 @@ export const handleAiInvocationError = (error: any, options?: { showToast?: bool
         extractedMessage = "Launchpad Database Table Missing: Please contact the system developer to initialize the 'idea_submissions' schema.";
     }
 
-    // Handle API key specific error messages
+    // Handle API key / model provider specific error messages
     if (extractedMessage.includes("API Key Error") || extractedMessage.includes("Requested entity was not found.")) {
-        extractedMessage = `AI Key Error: Your Google Gemini API key is invalid or not selected. Please re-select it using the selector.`;
+        extractedMessage = `AI configuration error: check your selected provider, model name, and API key. For local open-source mode, run Ollama and set VITE_AI_PROVIDER=ollama.`;
         if (window.aistudio && typeof window.aistudio.openSelectKey === 'function') {
             window.aistudio.openSelectKey().catch(e => console.error("Failed to open selector", e));
         }
@@ -39,11 +42,16 @@ export const handleAiInvocationError = (error: any, options?: { showToast?: bool
 
     // Handle Edge Function connectivity issues
     if (extractedMessage.includes("Failed to send a request to the Edge Function")) {
-        extractedMessage = "Edge Function Connectivity Error: The frontend could not reach the AI backend. Ensure you have deployed the 'ai-handler' function using 'supabase functions deploy ai-handler' or that your local 'supabase functions serve' is running and accessible.";
+        extractedMessage = "AI backend connectivity error: deploy the Supabase 'ai-handler' function, run local Supabase functions, or switch to local Ollama with VITE_AI_PROVIDER=ollama.";
     }
 
     if (shouldToast) {
-        toast.error(extractedMessage, { duration: 6000 });
+        const now = Date.now();
+        const lastShownAt = recentErrorToasts.get(extractedMessage) || 0;
+        if (now - lastShownAt > ERROR_TOAST_DEDUP_MS) {
+            recentErrorToasts.set(extractedMessage, now);
+            toast.error(extractedMessage, { id: `error-${extractedMessage.slice(0, 80)}`, duration: 6000 });
+        }
     }
 
     return extractedMessage;

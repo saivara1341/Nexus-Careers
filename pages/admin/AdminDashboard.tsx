@@ -1,29 +1,30 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { Suspense, lazy, useState, useEffect } from 'react';
 import type { AdminProfile, AdminRole, Opportunity } from '../../types.ts';
 import { Header } from '../../components/layout/Header.tsx';
-import StudentsHub from './StudentsHub.tsx';
-import OpportunityManagement from './OpportunityManagement.tsx';
-import StudentQueries from './StudentQueries.tsx';
-import { StatisticsPage } from './StatisticsPage.tsx';
-import StudentDataManagementPage from './StudentDataManagementPage.tsx';
-import AIMentorPage from './AIMentorPage.tsx';
-import FacultyManagementPage from './FacultyManagementPage.tsx';
 import { UNIVERSITY_LEVEL_ROLES } from '../../types.ts';
-import DepartmentManagementPage from './DepartmentManagementPage.tsx';
-import DepartmentViewPage from './DepartmentViewPage.tsx';
-import StudentPerformancePage from './StudentPerformancePage.tsx';
-import { AdminProfilePage } from './AdminProfilePage.tsx';
-import AdminLogsPage from './AdminLogsPage.tsx';
 import { SupportSection } from '../../components/support/SupportSection.tsx';
 import { MFAOverlay } from '../../components/auth/MFAOverlay.tsx';
 import { useSupabase } from '../../contexts/SupabaseContext.tsx';
 // Add missing useQueryClient import
 import { useQueryClient } from '@tanstack/react-query';
 import { NotificationsCenter } from '../../components/shared/NotificationsCenter.tsx';
-import { CandidatePipelinePage } from './CandidatePipelinePage.tsx';
 import toast from 'react-hot-toast';
 import { GlobalSearch } from '../../components/admin/GlobalSearch.tsx';
+import { Spinner } from '../../components/ui/Spinner.tsx';
+import { safeGetStorage, safeParseJson, safeSetStorage } from '../../utils/platform.ts';
+
+const StudentsHub = lazy(() => import('./StudentsHub.tsx'));
+const OpportunityManagement = lazy(() => import('./OpportunityManagement.tsx'));
+const StudentQueries = lazy(() => import('./StudentQueries.tsx'));
+const StatisticsPage = lazy(() => import('./StatisticsPage.tsx').then(module => ({ default: module.StatisticsPage })));
+const StudentDataManagementPage = lazy(() => import('./StudentDataManagementPage.tsx'));
+const AIMentorPage = lazy(() => import('./AIMentorPage.tsx'));
+const DepartmentViewPage = lazy(() => import('./DepartmentViewPage.tsx'));
+const StudentPerformancePage = lazy(() => import('./StudentPerformancePage.tsx'));
+const AdminProfilePage = lazy(() => import('./AdminProfilePage.tsx').then(module => ({ default: module.AdminProfilePage })));
+const AdminLogsPage = lazy(() => import('./AdminLogsPage.tsx'));
+const CandidatePipelinePage = lazy(() => import('./CandidatePipelinePage.tsx').then(module => ({ default: module.CandidatePipelinePage })));
 
 interface AdminDashboardProps {
     onLogout: () => void;
@@ -45,14 +46,14 @@ const NavItem: React.FC<{ text: string, active: boolean, onClick: () => void, ic
             className={`
                 w-full text-left font-display text-base md:text-lg p-3 md:p-3.5 rounded-lg transition-all duration-200 relative flex items-center gap-3 md:gap-4
                 ${active
-                    ? "bg-secondary/10 text-secondary shadow-[inset_3px_0_0_0_rgb(var(--color-secondary-rgb))]"
-                    : 'text-text-muted hover:text-text-base hover:bg-white/5'
+                    ? "bg-secondary/10 text-secondary shadow-[inset_3px_0_0_0_rgb(var(--color-secondary-rgb))] theme-professional:bg-primary theme-professional:text-white theme-professional:shadow-sm"
+                    : 'text-text-muted hover:text-text-base hover:bg-white/5 theme-professional:text-text-base theme-professional:hover:bg-primary/5 theme-professional:hover:text-primary'
                 }
                 ${isSidebarCollapsed ? 'justify-center' : ''}
             `}
         >
             <div className="w-8 h-8 flex items-center justify-center flex-shrink-0">
-                <span className={`material-symbols-outlined text-2xl ${active ? 'text-secondary' : 'text-text-muted'}`}>{icon}</span>
+                <span className={`material-symbols-outlined text-2xl ${active ? 'text-secondary theme-professional:text-white' : 'text-text-muted theme-professional:text-text-muted'}`}>{icon}</span>
             </div>
             <span className={`whitespace-nowrap transition-opacity duration-200 ${isSidebarCollapsed ? 'opacity-0 w-0' : 'opacity-100'}`}>
                 {text}
@@ -70,12 +71,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, user }) => {
 
     // Resizable Sidebar States
     const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
-        const stored = localStorage.getItem('adminSidebarWidth');
+        const stored = safeGetStorage(window.localStorage, 'adminSidebarWidth');
         return stored ? parseInt(stored, 10) : DEFAULT_EXPANDED_SIDEBAR_WIDTH;
     });
     const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
-        const stored = localStorage.getItem('adminSidebarCollapsed');
-        return stored ? JSON.parse(stored) : false;
+        const stored = safeGetStorage(window.localStorage, 'adminSidebarCollapsed');
+        return safeParseJson(stored, false);
     });
     const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
     const [isResizing, setIsResizing] = useState(false);
@@ -99,6 +100,17 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, user }) => {
             if (command.type === 'NAVIGATE') {
                 setActiveView(command.view);
                 toast(`Opening ${command.view}...`, { icon: '🚀' });
+            } else if (command.type === 'OPEN_SEARCH') {
+                setIsSearchOpen(true);
+                toast('Search opened.', { icon: 'search' });
+            } else if (command.type === 'EXPORT_DATA') {
+                const exportButton = Array.from(document.querySelectorAll('button')).find(button => /export|download/i.test(button.textContent || '')) as HTMLButtonElement | undefined;
+                if (exportButton && !exportButton.disabled) {
+                    exportButton.click();
+                    toast.success('Export action started.');
+                } else {
+                    toast.error('Open a page with an available export button first.');
+                }
             }
         };
         window.addEventListener('NEXUS_AGENT_COMMAND', handleCommand);
@@ -130,13 +142,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, user }) => {
 
     const handleMouseUp = () => {
         setIsResizing(false);
-        localStorage.setItem('adminSidebarWidth', sidebarWidth.toString());
+        safeSetStorage(window.localStorage, 'adminSidebarWidth', sidebarWidth.toString());
     };
 
     const toggleDesktopSidebar = () => {
         const newState = !isSidebarCollapsed;
         setIsSidebarCollapsed(newState);
-        localStorage.setItem('adminSidebarCollapsed', JSON.stringify(newState));
+        safeSetStorage(window.localStorage, 'adminSidebarCollapsed', JSON.stringify(newState));
     };
 
     const handleViewChange = (view: AdminView) => {
@@ -180,29 +192,26 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, user }) => {
                     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 md:hidden" onClick={() => setIsMobileSidebarOpen(false)} />
                 )}
 
-                <nav className={`fixed inset-y-0 left-0 z-50 bg-card-bg/95 backdrop-blur-xl border-r border-primary/20 transform transition-transform duration-300 md:static md:translate-x-0 flex flex-col ${isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
+                <nav className={`fixed inset-y-0 left-0 z-50 bg-card-bg/95 backdrop-blur-xl border-r border-primary/20 theme-professional:border-stone-200 theme-professional:bg-card-bg theme-professional:shadow-xl theme-professional:shadow-orange-100/70 transform transition-transform duration-300 md:static md:translate-x-0 flex flex-col ${isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
                     style={{ width: isSidebarCollapsed ? `${WIDGET_SIDEBAR_WIDTH}px` : `${sidebarWidth}px` }}>
 
                     <div className="flex items-center justify-between p-5 mb-2 border-b border-primary/10 h-[70px]">
                         {!isSidebarCollapsed && (
                             <div className="flex flex-col truncate">
-                                <h2 className="font-display text-sm md:text-base font-black tracking-tighter leading-none uppercase"
-                                    style={{
-                                        textShadow: '0 1px 4px rgba(0,0,0,0.5)',
-                                    }}>
-                                    <span style={{ color: '#4ade80' }}>ANURAG</span> <span className="text-white/80">UNIVERSITY</span>
+                                <h2 className="font-display text-sm md:text-base font-black tracking-tighter leading-none uppercase">
+                                    <span className="text-secondary theme-professional:text-primary">ANURAG</span> <span className="text-white/80 theme-professional:text-text-base">UNIVERSITY</span>
                                 </h2>
                                 <span className="text-[8px] text-text-muted/60 uppercase tracking-[0.3em] mt-1 font-bold">Admin Interface</span>
                             </div>
                         )}
 
                         {/* Desktop Toggle */}
-                        <button onClick={toggleDesktopSidebar} className="hidden md:block mx-auto text-text-muted hover:text-white transition-colors p-1.5 rounded-md hover:bg-white/5">
+                        <button onClick={toggleDesktopSidebar} className="hidden md:block mx-auto text-text-muted hover:text-white theme-professional:hover:text-primary transition-colors p-1.5 rounded-md hover:bg-white/5 theme-professional:hover:bg-primary/5">
                             <span className="material-symbols-outlined">{isSidebarCollapsed ? 'keyboard_double_arrow_right' : 'keyboard_double_arrow_left'}</span>
                         </button>
 
                         {/* Mobile Close Button */}
-                        <button onClick={() => setIsMobileSidebarOpen(false)} className="md:hidden text-text-muted hover:text-white p-1">
+                        <button onClick={() => setIsMobileSidebarOpen(false)} className="md:hidden text-text-muted hover:text-white theme-professional:hover:text-primary p-1">
                             <span className="material-symbols-outlined">close</span>
                         </button>
                     </div>
@@ -249,7 +258,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, user }) => {
                     </div>
 
                     <div className="flex-1 overflow-auto p-4 md:p-8">
-                        {renderView()}
+                        <Suspense fallback={<div className="min-h-[420px] flex items-center justify-center"><Spinner /></div>}>
+                            {renderView()}
+                        </Suspense>
                     </div>
                 </main>
 
@@ -281,7 +292,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout, user }) => {
             case 'queries': return <StudentQueries user={user} />;
             case 'ai-mentor': return <AIMentorPage />;
             case 'department-view': return <DepartmentViewPage user={user} />;
-            case 'profile': return <AdminProfilePage user={user} />;
+            case 'profile': return <AdminProfilePage user={user} onLogout={onLogout} />;
             case 'support': return <SupportSection user={user} />;
             case 'notifications': return <NotificationsCenter user={user} onClose={() => setActiveView('dashboard')} />;
             case 'logs': return <AdminLogsPage />;

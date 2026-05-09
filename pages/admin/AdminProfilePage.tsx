@@ -17,7 +17,7 @@ const uploadAdminPhoto = async (supabase: any, userId: string, file: File) => {
     return urlData.publicUrl;
 };
 
-export const AdminProfilePage: React.FC<{ user: AdminProfile }> = ({ user }) => {
+export const AdminProfilePage: React.FC<{ user: AdminProfile; onLogout?: () => void }> = ({ user, onLogout }) => {
     const supabase = useSupabase();
     const queryClient = useQueryClient();
     const [isLoading, setIsLoading] = useState(false);
@@ -120,12 +120,20 @@ export const AdminProfilePage: React.FC<{ user: AdminProfile }> = ({ user }) => 
     return (
         <div className="max-w-6xl mx-auto pb-20 font-body">
             <header className="mb-8">
-                <h1 className="font-display text-2xl md:text-3xl font-bold uppercase mb-2 text-primary">
-                    Admin Profile
-                </h1>
-                <p className="text-text-muted text-sm font-mono max-w-2xl italic">
-                    Institutional identity management, security protocols, and administrative clearance.
-                </p>
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                        <h1 className="font-display text-2xl md:text-3xl font-bold uppercase mb-2 text-primary">
+                            Admin Profile
+                        </h1>
+                        <p className="text-text-muted text-sm">Profile, security, and access settings.</p>
+                    </div>
+                    {onLogout && (
+                        <Button onClick={onLogout} variant="ghost" className="self-start flex items-center gap-2">
+                            <span className="material-symbols-outlined text-lg">logout</span>
+                            Logout
+                        </Button>
+                    )}
+                </div>
             </header>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

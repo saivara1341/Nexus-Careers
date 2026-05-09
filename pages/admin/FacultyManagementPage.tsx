@@ -28,6 +28,7 @@ const fetchDepartments = async (supabase, college: string): Promise<Department[]
         .select('id, name, college_name')
         .eq('college_name', college)
         .order('name', { ascending: true });
+    if (error?.code === '42P01') return [];
     if (error) throw error;
     return data || [];
 };

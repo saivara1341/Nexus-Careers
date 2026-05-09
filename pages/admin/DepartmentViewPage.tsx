@@ -10,6 +10,7 @@ import { MarkdownRenderer } from '../../components/ai/MarkdownRenderer.tsx';
 import { Modal } from '../../components/ui/Modal.tsx';
 import type { AdminProfile, DepartmentAnnouncement } from '../../types.ts';
 import { generateGoogleMeetLink } from '../../utils/meet.ts';
+import { runAI } from '../../services/aiClient.ts';
 import toast from 'react-hot-toast';
 
 interface DepartmentViewPageProps {
@@ -26,6 +27,7 @@ interface SyllabusItem {
 
 const fetchDepartmentAdmins = async (supabase: any, college: string, department: string) => {
     const { data, error } = await supabase.from('admins').select('*').eq('college', college).eq('department', department);
+    if (error?.code === '42P01') return [];
     if (error) throw error;
 
     return (data as AdminProfile[]).sort((a, b) => {
@@ -37,6 +39,7 @@ const fetchDepartmentAdmins = async (supabase: any, college: string, department:
 
 const fetchDepartmentAnnouncements = async (supabase: any, department: string) => {
     const { data, error } = await supabase.from('department_announcements').select('*').eq('department_id', department).order('created_at', { ascending: false });
+    if (error?.code === '42P01') return [];
     if (error) throw error;
     return data as DepartmentAnnouncement[];
 };
@@ -84,6 +87,7 @@ const DepartmentViewPage: React.FC<DepartmentViewPageProps> = ({ user }) => {
                 poster_name: user.name,
                 content: `### ${payload.title}\n\n${payload.content}`
             });
+            if (error?.code === '42P01') throw new Error('Department announcements are not enabled in this database yet.');
             if (error) throw error;
         },
         onSuccess: () => {
@@ -115,18 +119,14 @@ const DepartmentViewPage: React.FC<DepartmentViewPageProps> = ({ user }) => {
     const handleGenerateMoM = async () => {
         setIsMoMGenerating(true);
         try {
-            // Using existing generate-mom task from ai-handler
-            const { data: aiResult, error } = await supabase.functions.invoke('ai-handler', {
-                body: {
-                    task: 'generate-mom',
-                    payload: {
-                        title: `Departmental Strategy Meet - ${user.department}`,
-                        notes: `Discussion on Departmental Growth, Syllabus coverage for current semester, and Placement readiness for upcoming drives. Attendees: ${departmentAdmins.map(a => a.name).join(', ')}.`
-                    }
+            const aiResult = await runAI({
+                task: 'generate-mom',
+                payload: {
+                    title: `Departmental Strategy Meet - ${user.department}`,
+                    notes: `Discussion on Departmental Growth, Syllabus coverage for current semester, and Placement readiness for upcoming drives. Attendees: ${departmentAdmins.map(a => a.name).join(', ')}.`
                 },
+                supabase,
             });
-
-            if (error) throw error;
 
             setGeneratedMoM(aiResult.text);
             setMeetingLink(null); // Conclude meeting

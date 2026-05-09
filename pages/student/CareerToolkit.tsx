@@ -13,6 +13,7 @@ import { runAI } from '../../services/aiClient.ts';
 import { useChatContext } from '../../contexts/ChatContext.tsx';
 import { AudioVisualizer } from '../../components/ui/AudioVisualizer.tsx';
 import toast from 'react-hot-toast';
+import { getSpeechSynthesis, safeGetStorage, safeSetStorage } from '../../utils/platform.ts';
 // Fix: Updated import to use named export from MockTestPage.tsx.
 import { MockTestPage } from './MockTestPage.tsx';
 
@@ -75,7 +76,7 @@ const ResumeAnalyzer: React.FC = () => {
             if (!file) throw new Error("Upload a resume.");
 
             const cacheKey = `resume_analysis_${file.name}_${file.size}_${jobDesc.substring(0, 20).replace(/\s/g, '')}`;
-            const cachedResult = localStorage.getItem(cacheKey);
+            const cachedResult = safeGetStorage(window.localStorage, cacheKey);
             if (cachedResult) return cachedResult;
 
             let base64Data = '';
@@ -99,7 +100,7 @@ const ResumeAnalyzer: React.FC = () => {
                 supabase: supabase
             });
 
-            try { localStorage.setItem(cacheKey, data.text); } catch (e) { console.error("Cache full", e); }
+            safeSetStorage(window.localStorage, cacheKey, data.text);
             return data.text;
         },
         onError: (e) => handleAiInvocationError(e)
@@ -292,7 +293,7 @@ const MockInterviewer: React.FC<{ user: any }> = ({ user }) => {
 
     // Voice & Video Refs
     const recognitionRef = useRef<any>(null);
-    const synthRef = useRef<SpeechSynthesis>(window.speechSynthesis);
+    const synthRef = useRef<SpeechSynthesis | null>(getSpeechSynthesis());
     const videoRef = useRef<HTMLVideoElement>(null);
     const streamRef = useRef<MediaStream | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -328,6 +329,7 @@ const MockInterviewer: React.FC<{ user: any }> = ({ user }) => {
 
     const startCamera = async () => {
         try {
+            if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera is not supported on this device.');
             const stream = await navigator.mediaDevices.getUserMedia({ video: true });
             if (videoRef.current) {
                 videoRef.current.srcObject = stream;
@@ -402,7 +404,11 @@ const MockInterviewer: React.FC<{ user: any }> = ({ user }) => {
         if (isListening) {
             recognitionRef.current?.stop();
         } else {
-            recognitionRef.current?.start();
+            if (!recognitionRef.current) {
+                toast.error('Voice input is not supported on this device.');
+                return;
+            }
+            recognitionRef.current.start();
         }
     };
 
@@ -478,7 +484,7 @@ const MockInterviewer: React.FC<{ user: any }> = ({ user }) => {
     };
 
     const stopSession = () => {
-        synthRef.current.cancel();
+        synthRef.current?.cancel();
         recognitionRef.current?.stop();
         stopCamera();
     };

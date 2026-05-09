@@ -5,6 +5,7 @@ import { Button } from '../ui/Button.tsx';
 import { Spinner } from '../ui/Spinner.tsx';
 import type { AdminProfile, CompanyProfile } from '../../types.ts';
 import toast from 'react-hot-toast';
+import { safeGetStorage, safeSetStorage } from '../../utils/platform.ts';
 
 interface MFAOverlayProps {
     user: AdminProfile | CompanyProfile;
@@ -12,7 +13,10 @@ interface MFAOverlayProps {
 }
 
 export const MFAOverlay: React.FC<MFAOverlayProps> = ({ user, children }) => {
-    const [isVerified, setIsVerified] = useState(false);
+    const [isVerified, setIsVerified] = useState(() => {
+        if (!user.mfa_enabled) return true;
+        return safeGetStorage(window.sessionStorage, `mfa_verified_${user.id}`) === 'true';
+    });
     const [showModal, setShowModal] = useState(false);
     
     // MFA State
@@ -25,16 +29,19 @@ export const MFAOverlay: React.FC<MFAOverlayProps> = ({ user, children }) => {
         // 1. Check if MFA is enabled for this user
         if (!user.mfa_enabled) {
             setIsVerified(true);
+            setShowModal(false);
             return;
         }
 
         // 2. Check if already verified in this session
         const sessionKey = `mfa_verified_${user.id}`;
-        const isSessionVerified = sessionStorage.getItem(sessionKey);
+        const isSessionVerified = safeGetStorage(window.sessionStorage, sessionKey);
 
         if (isSessionVerified === 'true') {
             setIsVerified(true);
+            setShowModal(false);
         } else {
+            setIsVerified(false);
             setShowModal(true);
             // Default behavior: Auto-send OTP if that's the preferred method
             if (user.role === 'company' || (user as AdminProfile).mfa_method === 'otp') {
@@ -67,7 +74,7 @@ export const MFAOverlay: React.FC<MFAOverlayProps> = ({ user, children }) => {
             // Simulation of WebAuthn / Passkey interaction
             await new Promise(resolve => setTimeout(resolve, 1200));
             toast.success("Biometric Scan Successful");
-            sessionStorage.setItem(`mfa_verified_${user.id}`, 'true');
+            safeSetStorage(window.sessionStorage, `mfa_verified_${user.id}`, 'true');
             setIsVerified(true);
             setShowModal(false);
         } catch (e) {
@@ -100,7 +107,7 @@ export const MFAOverlay: React.FC<MFAOverlayProps> = ({ user, children }) => {
 
         if (success) {
             toast.success("Identity Verified. Welcome.");
-            sessionStorage.setItem(`mfa_verified_${user.id}`, 'true');
+            safeSetStorage(window.sessionStorage, `mfa_verified_${user.id}`, 'true');
             setIsVerified(true);
             setShowModal(false);
         }

@@ -11,7 +11,7 @@ import { runAI } from '../../services/aiClient.ts';
 import { handleAiInvocationError } from '../../utils/errorHandlers.ts';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
-const CompanyProfilePage: React.FC<{ user: CompanyProfile }> = ({ user }) => {
+const CompanyProfilePage: React.FC<{ user: CompanyProfile; onLogout?: () => void }> = ({ user, onLogout }) => {
     const supabase = useSupabase();
     const queryClient = useQueryClient();
     const [isLoading, setIsLoading] = useState(false);
@@ -144,13 +144,21 @@ const CompanyProfilePage: React.FC<{ user: CompanyProfile }> = ({ user }) => {
                     <h1 className="font-display text-3xl md:text-4xl text-primary mb-2">Corporate Brand Identity</h1>
                     <p className="text-text-muted text-sm uppercase tracking-widest font-bold">Employer Presence Management</p>
                 </div>
-                <div className="flex bg-card-bg border border-white/10 rounded-lg p-1">
-                    <button onClick={() => setActiveTab('profile')} className={`px-4 py-2 rounded-md text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'profile' ? 'bg-primary text-black' : 'text-text-muted hover:text-white'}`}>
-                        <span className="material-symbols-outlined text-sm">storefront</span> Brand Profile
-                    </button>
-                    <button onClick={() => setActiveTab('account')} className={`px-4 py-2 rounded-md text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'account' ? 'bg-secondary text-black' : 'text-text-muted hover:text-white'}`}>
-                        <span className="material-symbols-outlined text-sm">security</span> Security
-                    </button>
+                <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex bg-card-bg border border-white/10 rounded-lg p-1">
+                        <button onClick={() => setActiveTab('profile')} className={`px-4 py-2 rounded-md text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'profile' ? 'bg-primary text-black theme-professional:text-white' : 'text-text-muted hover:text-white theme-professional:hover:text-text-base'}`}>
+                            <span className="material-symbols-outlined text-sm">storefront</span> Brand Profile
+                        </button>
+                        <button onClick={() => setActiveTab('account')} className={`px-4 py-2 rounded-md text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'account' ? 'bg-secondary text-black theme-professional:text-white' : 'text-text-muted hover:text-white theme-professional:hover:text-text-base'}`}>
+                            <span className="material-symbols-outlined text-sm">security</span> Security
+                        </button>
+                    </div>
+                    {onLogout && (
+                        <Button onClick={onLogout} variant="ghost" className="flex items-center gap-2">
+                            <span className="material-symbols-outlined text-lg">logout</span>
+                            Logout
+                        </Button>
+                    )}
                 </div>
             </div>
 

@@ -44,7 +44,7 @@ const AcademicHQ: React.FC<{ user: AdminProfile }> = ({ user }) => {
                                 <p className="font-bold text-secondary">Marks Spreadsheet</p>
                                 <p className="text-xs text-text-muted">Import internal or external examination scores.</p>
                             </div>
-                            <Button variant="secondary" className="text-xs py-1">Import XLSX</Button>
+                            <Button variant="secondary" className="text-xs py-1">Import CSV</Button>
                         </div>
                     </div>
                 </Card>

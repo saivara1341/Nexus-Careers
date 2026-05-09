@@ -19,9 +19,6 @@ export const SupportSection: React.FC<SupportSectionProps> = ({ user }) => {
                     <h1 className="font-display text-2xl md:text-3xl font-bold uppercase mb-2 text-primary">
                         Help & Support
                     </h1>
-                    <p className="text-text-muted text-sm font-mono max-w-2xl italic">
-                        Institutional technical assistance and incident reporting gateway.
-                    </p>
                 </header>
                 <Button onClick={() => setIsModalOpen(true)} className="shadow-primary animate-pulse bg-red-500 hover:bg-red-600 text-white border-none text-sm py-2">
                     ⚠️ Report an Issue
@@ -35,7 +32,7 @@ export const SupportSection: React.FC<SupportSectionProps> = ({ user }) => {
                         <h3 className="font-display text-xl text-secondary">Contact Support</h3>
                     </div>
                     <p className="text-sm text-text-muted mb-6 flex-grow">
-                        Facing technical difficulties with the Nexus platform? Our support team is on standby to assist you with critical issues.
+                        Get help with login, profile, applications, or reports.
                     </p>
                     <div className="space-y-2 text-sm bg-black/20 p-4 rounded-lg border border-white/5">
                         <p className="flex items-center gap-2"><span className="text-secondary">📧</span> <a href="mailto:support@nexuscareers.com" className="hover:underline">support@nexuscareers.com</a></p>

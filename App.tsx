@@ -1,16 +1,11 @@
 
-import React, { useState, useEffect } from 'react';
-import AdminDashboard from './pages/admin/AdminDashboard.tsx';
-import StudentDashboard from './pages/student/StudentDashboard.tsx';
-import CompanyDashboard from './pages/company/CompanyDashboard.tsx';
-import DeveloperDashboard from './pages/developer/DeveloperDashboard.tsx';
+import React, { Suspense, lazy, useState, useEffect } from 'react';
 import AuthPage from './pages/AuthPage.tsx';
 import { createSupabaseClient } from './services/supabase.ts';
 import { SupabaseProvider, useSupabase } from './contexts/SupabaseContext.tsx';
 import type { Session, SupabaseClient } from '@supabase/supabase-js';
 import type { AdminProfile, StudentProfile, CompanyProfile, DeveloperProfile } from './types.ts';
 import { normalizeDepartmentName } from './types.ts'; // Import normalizeDepartmentName
-import ChatBot from './components/ai/ChatBot.tsx';
 import toast, { Toaster } from 'react-hot-toast';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import SplashScreen from './components/layout/SplashScreen.tsx';
@@ -21,6 +16,24 @@ import { Card } from './components/ui/Card.tsx';
 import { Button } from './components/ui/Button.tsx';
 
 const DEVELOPER_EMAIL = 'ssaivaraprasad51@gmail.com';
+
+const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard.tsx'));
+const StudentDashboard = lazy(() => import('./pages/student/StudentDashboard.tsx'));
+const CompanyDashboard = lazy(() => import('./pages/company/CompanyDashboard.tsx'));
+const DeveloperDashboard = lazy(() => import('./pages/developer/DeveloperDashboard.tsx'));
+const ChatBot = lazy(() => import('./components/ai/ChatBot.tsx'));
+
+const upsertWithSchemaRetry = async (supabase: SupabaseClient, table: string, payload: Record<string, any>, options: { onConflict: string }) => {
+  const { error } = await supabase.from(table).upsert(payload, options);
+  if (!error) return;
+
+  const missingColumn = error.message?.match(/Could not find the '([^']+)' column/)?.[1];
+  if (missingColumn) {
+    throw new Error(`Database schema mismatch: ${table}.${missingColumn} is missing. Apply the latest Supabase migrations before syncing this profile.`);
+  }
+
+  throw error;
+};
 
 const fetchUserProfile = async (supabase: SupabaseClient): Promise<{ session: Session | null; profile: AdminProfile | StudentProfile | CompanyProfile | DeveloperProfile | null }> => {
   try {
@@ -41,16 +54,31 @@ const fetchUserProfile = async (supabase: SupabaseClient): Promise<{ session: Se
       return { session, profile: devProfile };
     }
 
+    const [adminResult, studentResult, companyResult] = await Promise.all([
+      supabase.from('admins').select('*').eq('id', session.user.id).maybeSingle(),
+      supabase.from('students').select('*').eq('id', session.user.id).maybeSingle(),
+      supabase.from('companies').select('*').eq('id', session.user.id).maybeSingle(),
+    ]);
+
     // 1. Check Admin
-    let { data: adminData } = await supabase.from('admins').select('*').eq('id', session.user.id).single();
-    if (adminData) return { session, profile: { ...adminData, role: adminData.role || 'admin' } };
+    const adminData = adminResult.data;
+    if (adminData) return {
+      session,
+      profile: {
+        ...adminData,
+        name: adminData.name || adminData.full_name || session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || 'Admin',
+        email: adminData.email || session.user.email || '',
+        college: adminData.college || session.user.user_metadata?.college || 'Anurag University',
+        role: adminData.role || adminData.admin_role || 'admin'
+      }
+    };
 
     // 2. Check Student
-    let { data: studentData } = await supabase.from('students').select('*').eq('id', session.user.id).single();
+    const studentData = studentResult.data;
     if (studentData) return { session, profile: { ...studentData, role: 'student' } };
 
     // 3. Check Company
-    let { data: companyData } = await supabase.from('companies').select('*').eq('id', session.user.id).single();
+    const companyData = companyResult.data;
     if (companyData) return { session, profile: { ...companyData, role: 'company' } };
 
     return { session, profile: null };
@@ -63,7 +91,7 @@ const fetchUserProfile = async (supabase: SupabaseClient): Promise<{ session: Se
 const AppContent: React.FC = () => {
   const supabase = useSupabase();
   const queryClient = useQueryClient();
-  const [isAppLoading, setIsAppLoading] = useState(true);
+  const [isAssistantReady, setIsAssistantReady] = useState(false);
   const [isCreatingProfile, setIsCreatingProfile] = useState(false);
   const [showPasswordResetModal, setShowPasswordResetModal] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -74,18 +102,20 @@ const AppContent: React.FC = () => {
       if (event === 'SIGNED_OUT') {
         queryClient.setQueryData(['userProfile'], { session: null, profile: null });
         setSyncError(null);
-      } else {
+      } else if (event !== 'INITIAL_SESSION') {
         queryClient.invalidateQueries({ queryKey: ['userProfile'] });
       }
     });
 
-    const timer = setTimeout(() => setIsAppLoading(false), 3000);
-
     return () => {
       subscription.unsubscribe();
-      clearTimeout(timer);
     };
   }, [queryClient, supabase]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setIsAssistantReady(true), 800);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const { data, isLoading: isProfileLoading } = useQuery({
     queryKey: ['userProfile'],
@@ -126,8 +156,9 @@ const AppContent: React.FC = () => {
             }
 
             // Use UPSERT to prevent "Duplicate Key" errors if sync is triggered twice
-            const { error: insError } = await supabase.from('students').upsert({
+            await upsertWithSchemaRetry(supabase, 'students', {
               id: user.id,
+              user_id: user.id,
               name,
               email: user.email!, // Always use the authenticated user's email for the active profile
               college,
@@ -135,32 +166,24 @@ const AppContent: React.FC = () => {
               department: normalizeDepartmentName(registryData?.department || metadata.department || 'General') || 'General',
               roll_number: registryData?.roll_number || metadata.roll_number || 'STU-' + Math.random().toString(36).substring(7).toUpperCase(),
               ug_cgpa: registryData?.ug_cgpa || 0,
+              cgpa: registryData?.cgpa || registryData?.ug_cgpa || 0,
               backlogs: registryData?.backlogs || 0,
+              passing_year: registryData?.passing_year || registryData?.ug_passout_year || new Date().getFullYear() + 1,
+              verification_status: registryData ? 'verified' : 'pending_registry',
               level: 1,
               xp: 0,
               xp_to_next_level: 100
             }, { onConflict: 'id' }); // Conflict on 'id' is standard for primary key
-
-            if (insError) throw insError;
           } else if (role === 'company') {
-            const { error: insError } = await supabase.from('companies').upsert({
-              id: user.id, name, email: user.email!,
+            await upsertWithSchemaRetry(supabase, 'companies', {
+              id: user.id, user_id: user.id, name, email: user.email!,
               company_name: metadata.company_name || name,
               industry: metadata.industry || 'Technology',
-              is_verified: metadata.is_verified || false
+              verification_file_url: metadata.verification_file_url || null,
+              is_verified: false
             }, { onConflict: 'id' });
-
-            if (insError) throw insError;
-          } else { // Admin
-            const { error: insError } = await supabase.from('admins').upsert({
-              id: user.id, name, email: user.email!,
-              college: metadata.college || 'Anurag University',
-              role: role, department: metadata.department || null,
-              is_verified: metadata.is_verified || false,
-              employee_id: metadata.employee_id || null
-            }, { onConflict: 'id' });
-
-            if (insError) throw insError;
+          } else {
+            throw new Error('Admin and staff accounts must be provisioned by an existing verified administrator before first login.');
           }
           await queryClient.invalidateQueries({ queryKey: ['userProfile'] });
           toast.success("Identity synchronization complete.");
@@ -168,7 +191,10 @@ const AppContent: React.FC = () => {
           // Fix: Extracting the actual error message instead of letting it default to [object Object]
           const errorMessage = error?.message || error?.details || "Database connection timed out.";
           console.error("Auto-creation failed:", errorMessage, error);
-          setSyncError(errorMessage);
+          const publicMessage = /schema|column|relation|policy|permission|RLS|row-level/i.test(errorMessage)
+            ? 'Identity synchronization is blocked by a server configuration issue. Please contact the platform administrator.'
+            : errorMessage;
+          setSyncError(publicMessage);
         } finally {
           setIsCreatingProfile(false);
         }
@@ -187,8 +213,6 @@ const AppContent: React.FC = () => {
     queryClient.invalidateQueries({ queryKey: ['userProfile'] });
   };
 
-  if (isAppLoading) return <SplashScreen />;
-
   if (!session && !isProfileLoading) return <AuthPage />;
 
   if (session && !userProfile && (isProfileLoading || isCreatingProfile)) {
@@ -206,7 +230,7 @@ const AppContent: React.FC = () => {
           <p className="text-text-muted text-sm mb-8 leading-relaxed">
             Nexus failed to link your security token with our database records.
             <br /><br />
-            <span className="text-xs opacity-60">System Message:</span>
+            <span className="text-xs opacity-60">Status:</span>
             <br />
             <code className="text-[10px] text-red-300 bg-red-900/20 p-2 block mt-1 rounded break-all whitespace-pre-wrap">{syncError}</code>
           </p>
@@ -240,11 +264,17 @@ const AppContent: React.FC = () => {
     <div className="min-h-screen bg-background text-text-base relative">
       <Toaster position="top-center" toastOptions={{ className: 'bg-card-bg text-text-base border border-primary/50' }} />
       <ChatProvider>
-        {userProfile.role === 'developer' && <DeveloperDashboard onLogout={handleLogout} user={userProfile as DeveloperProfile} />}
-        {userProfile.role === 'student' && <StudentDashboard onLogout={handleLogout} user={userProfile as StudentProfile} />}
-        {userProfile.role === 'company' && <CompanyDashboard onLogout={handleLogout} user={userProfile as CompanyProfile} />}
-        {userProfile.role !== 'student' && userProfile.role !== 'company' && userProfile.role !== 'developer' && <AdminDashboard onLogout={handleLogout} user={userProfile as AdminProfile} />}
-        <ChatBot session={session} />
+        <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><Spinner /></div>}>
+          {userProfile.role === 'developer' && <DeveloperDashboard onLogout={handleLogout} user={userProfile as DeveloperProfile} />}
+          {userProfile.role === 'student' && <StudentDashboard onLogout={handleLogout} user={userProfile as StudentProfile} />}
+          {userProfile.role === 'company' && <CompanyDashboard onLogout={handleLogout} user={userProfile as CompanyProfile} />}
+          {userProfile.role !== 'student' && userProfile.role !== 'company' && userProfile.role !== 'developer' && <AdminDashboard onLogout={handleLogout} user={userProfile as AdminProfile} />}
+        </Suspense>
+        {isAssistantReady && (
+          <Suspense fallback={null}>
+            <ChatBot session={session} userRole={userProfile.role} />
+          </Suspense>
+        )}
       </ChatProvider>
       {showPasswordResetModal && <PasswordUpdateModal onClose={() => setShowPasswordResetModal(false)} />}
     </div>
@@ -257,10 +287,15 @@ const App: React.FC = () => {
 
   useEffect(() => {
     try {
-      const supabaseUrl = (window as any).NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseAnonKey = (window as any).NEXT_PUBLIC_SUPABASE_ANON_KEY;
-      if (!supabaseUrl || !supabaseAnonKey) throw new Error("Nexus Infrastructure values missing.");
-      setSupabaseClient(createSupabaseClient(supabaseUrl, supabaseAnonKey));
+      const env = import.meta.env;
+      const supabaseUrl = env.VITE_SUPABASE_URL || (window as any).NEXT_PUBLIC_SUPABASE_URL;
+      const supabasePublishableKey =
+        env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+        env.VITE_SUPABASE_ANON_KEY ||
+        (window as any).NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+        (window as any).NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      if (!supabaseUrl || !supabasePublishableKey) throw new Error("Nexus Infrastructure values missing.");
+      setSupabaseClient(createSupabaseClient(supabaseUrl, supabasePublishableKey));
     } catch (error: any) {
       setSupabaseError(error.message);
     }

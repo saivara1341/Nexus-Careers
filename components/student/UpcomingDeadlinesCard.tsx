@@ -21,27 +21,45 @@ export const UpcomingDeadlinesCard: React.FC<UpcomingDeadlinesCardProps> = ({ us
             setLoading(true);
             try {
                  const today = new Date().toISOString();
-                 // Normalize user's department name for consistent comparison
-                 const normalizedUserDepartment = normalizeDepartmentName(user.department);
+                // Normalize user's department name for consistent comparison.
+                // Keep the DB query broad and apply the array OR locally; PostgREST
+                // array syntax is brittle across generated client types.
+                const normalizedUserDepartment = normalizeDepartmentName(user.department);
 
-                 const { data, error } = await supabase
+                let { data, error } = await supabase
                     .from('opportunities')
-                    .select('id, title, company, deadline')
+                    .select('id, title, company, deadline, allowed_departments')
                     .eq('college', user.college)
                     .eq('status', 'active')
                     .gte('deadline', today)
                     .lte('min_cgpa', user.ug_cgpa)
-                    // Use normalized department in the .cs operator
-                    .cs('allowed_departments', `{All,${normalizedUserDepartment}}`)
                     .order('deadline', { ascending: true })
-                    .limit(5);
+                    .limit(25);
+
+                if (error?.message?.includes('deadline')) {
+                    const fallback = await supabase
+                        .from('opportunities')
+                        .select('id, title, company, allowed_departments')
+                        .eq('college', user.college)
+                        .eq('status', 'active')
+                        .lte('min_cgpa', user.ug_cgpa)
+                        .limit(25);
+                    data = fallback.data?.map((opp: any) => ({ ...opp, deadline: null }));
+                    error = fallback.error;
+                }
 
                 if (error) {
                     handleAiInvocationError(error); // Use centralized error handler
                     throw error;
                 }
                 
-                setDeadlines(data as Opportunity[] || []);
+                const eligibleDeadlines = ((data || []) as Opportunity[])
+                    .filter(opp => {
+                        const allowed = opp.allowed_departments || [];
+                        return allowed.includes('All') || allowed.includes(normalizedUserDepartment || '');
+                    })
+                    .slice(0, 5);
+                setDeadlines(eligibleDeadlines);
             } catch (error: any) {
                 // handleAiInvocationError already toasts, no need for console.error here
             } finally {
@@ -65,7 +83,7 @@ export const UpcomingDeadlinesCard: React.FC<UpcomingDeadlinesCardProps> = ({ us
                                 <p className="text-sm text-gray-300">{opp.company}</p>
                             </div>
                             <div className="text-right">
-                                <p className="text-primary-cyan">{new Date(opp.deadline).toLocaleDateString()}</p>
+                                <p className="text-primary-cyan">{opp.deadline ? new Date(opp.deadline).toLocaleDateString() : 'Open'}</p>
                                 <p className="text-xs text-gray-500">Apply By</p>
                             </div>
                         </div>

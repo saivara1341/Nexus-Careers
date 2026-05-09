@@ -46,6 +46,12 @@ const sanitizeDate = (date: string | undefined | null) => {
     }
 };
 
+const formatDeadline = (date: string | undefined | null) => {
+    if (!date) return 'Open';
+    const parsed = new Date(date);
+    return Number.isNaN(parsed.getTime()) ? 'Open' : parsed.toLocaleDateString();
+};
+
 const upsertOpportunity = async (supabase: any, opportunity: Partial<Opportunity>) => {
     const { pipeline_stages, application_count, ...dbPayload } = opportunity as any;
 
@@ -148,9 +154,7 @@ const OpportunityManagement: React.FC<{ user: AdminProfile, onNavigateToPipeline
                         <h1 className="font-display text-2xl md:text-3xl font-bold uppercase mb-2 text-primary">
                             Opportunity Manager
                         </h1>
-                        <p className="text-text-muted text-sm font-mono max-w-2xl italic">
-                            Institutional job postings, AI-assisted scouting, and safety reports.
-                        </p>
+                        <p className="text-text-muted text-sm">Create jobs, review reports, and manage drives.</p>
                     </div>
                     <div className="flex gap-2 bg-card-bg/50 p-1 rounded-lg border border-primary/20 shrink-0">
                         <button onClick={() => setActiveTab('manage')} className={`px-4 py-2 rounded-md text-[10px] md:text-xs font-display uppercase tracking-wider font-bold transition-all ${activeTab === 'manage' ? 'bg-primary text-black shadow-md' : 'text-text-muted hover:text-white'}`}>Active Jobs</button>
@@ -180,7 +184,7 @@ const OpportunityManagement: React.FC<{ user: AdminProfile, onNavigateToPipeline
                                                         <p className="font-bold text-primary text-lg group-hover:translate-x-1 transition-transform">{opp.title}</p>
                                                         <p className="text-xs text-text-muted">{opp.company}</p>
                                                     </td>
-                                                    <td className="p-3 font-mono text-secondary">{new Date(opp.deadline).toLocaleDateString()}</td>
+                                                    <td className="p-3 font-mono text-secondary">{formatDeadline(opp.deadline)}</td>
                                                     <td className="p-3 text-center">
                                                         <span className="bg-primary/10 text-primary font-bold px-3 py-1 rounded-full border border-primary/20">{opp.application_count}</span>
                                                     </td>

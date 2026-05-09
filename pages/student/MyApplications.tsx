@@ -56,7 +56,7 @@ const fetchApplications = async (supabase, userId: string, page: number) => {
 
     const { data, error, count } = await supabase
         .from('applications')
-        .select(`*, opportunity:opportunities(*)`, { count: 'exact' })
+        .select(`*, opportunity:opportunities!applications_opportunity_id_fkey(*)`, { count: 'exact' })
         .eq('student_id', userId)
         .order('created_at', { ascending: false })
         .range(from, to);
@@ -99,37 +99,30 @@ const verifyMilestoneProof = async (supabase, { app, user, proofFile, milestone 
         });
 
         if (aiResult.success) {
-            // 3. Success: Calculate Next Stage and Advance
+            // Students can submit proof, but stage advancement must be reviewed by a recruiter/admin.
             const pipeline = app.opportunity?.pipeline_stages || ['Applied', 'Verification', 'Assessment', 'Interview', 'Offer'];
             const currentIdx = pipeline.indexOf(milestone);
             let nextStage = milestone;
 
-            // Advance to next stage if available
             if (currentIdx !== -1 && currentIdx < pipeline.length - 1) {
                 nextStage = pipeline[currentIdx + 1];
             }
 
-            // Determine appropriate status based on next stage
-            let nextStatus = 'verified'; // Default for generic intermediate steps
-            const lowerNext = nextStage.toLowerCase();
-            if (lowerNext.includes('offer')) nextStatus = 'offered';
-            else if (lowerNext.includes('hired') || lowerNext.includes('joined')) nextStatus = 'hired';
-            else if (lowerNext.includes('interview')) nextStatus = 'shortlisted';
-            else if (lowerNext.includes('assessment')) nextStatus = 'shortlisted';
-            else if (lowerNext.includes('applied')) nextStatus = 'applied'; // Should rarely happen if advancing
-
-            // Update Database with new stage
             await supabase.from('applications').update({
-                status: nextStatus,
-                current_stage: nextStage,
-                rejection_reason: null // Clear any previous errors
+                status: 'pending_verification',
+                rejection_reason: null,
+                metadata: {
+                    ...(app.metadata || {}),
+                    latest_student_proof: {
+                        milestone,
+                        requested_next_stage: nextStage,
+                        submitted_at: new Date().toISOString(),
+                        ai_screening_result: aiResult.message || 'Initial proof screening passed.'
+                    }
+                }
             }).eq('id', app.id);
 
-            // Award XP for progress - Reduced for balance
-            const xpAward = lowerNext.includes('offer') ? 100 : 20;
-            await supabase.rpc('award_xp', { user_id: user.id, xp_amount: xpAward });
-
-            return { success: true, message: `Proof Validated! Advanced to ${nextStage}. (+${xpAward} XP)` };
+            return { success: true, message: `Proof submitted for ${nextStage}. A recruiter or placement officer must approve the stage update.` };
 
         } else {
             // 4. Failure: Revert status and record rejection reason
@@ -322,6 +315,7 @@ const MyApplications: React.FC<MyApplicationsProps> = ({ user }) => {
         queryKey: ['applications', user.id, page],
         queryFn: () => fetchApplications(supabase, user.id, page),
         placeholderData: (previousData) => previousData,
+        retry: false,
     });
 
     const applications = applicationsData?.data ?? [];

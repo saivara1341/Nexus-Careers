@@ -6,7 +6,6 @@
   <link rel="icon" type="image/svg+xml" href="/vite.svg" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Nexus Careers</title>
-  <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
@@ -78,13 +77,13 @@
     }
 
     .theme-professional {
-      --color-primary-rgb: 59 130 246;
-      --color-secondary-rgb: 99 102 241;
-      --color-background: #020617;
-      --color-card-bg: #0f172a;
-      --color-text-base: #f1f5f9;
-      --color-text-muted: #64748b;
-      --color-input-bg: #1e293b;
+      --color-primary-rgb: 194 65 12;
+      --color-secondary-rgb: 15 118 110;
+      --color-background: #fff8ed;
+      --color-card-bg: rgba(255, 253, 247, 0.94);
+      --color-text-base: #171717;
+      --color-text-muted: #6b6258;
+      --color-input-bg: #fffdf7;
     }
 
     body {
@@ -94,6 +93,74 @@
       line-height: 1.6;
       color: var(--color-text-base);
       overflow-x: hidden;
+    }
+
+    .theme-professional body {
+      background:
+        radial-gradient(circle at 10% 0%, rgba(245, 158, 11, 0.14), transparent 30rem),
+        radial-gradient(circle at 92% 10%, rgba(var(--color-secondary-rgb), 0.10), transparent 26rem),
+        linear-gradient(180deg, #fffdf7 0%, var(--color-background) 48%, #f6efe3 100%);
+    }
+
+    .theme-professional .animated-gradient-text {
+      background: linear-gradient(135deg, #171717 0%, #c2410c 48%, #0f766e 100%);
+      background-size: 200% auto;
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .theme-professional header.bg-card-bg\/80,
+    .theme-professional nav.bg-card-bg\/95 {
+      background: rgba(255, 253, 247, 0.96) !important;
+      border-color: #eadccb !important;
+      box-shadow: 0 12px 30px rgba(120, 53, 15, 0.08) !important;
+    }
+
+    .theme-professional nav [class*="border-primary"] {
+      border-color: #eadccb !important;
+    }
+
+    .theme-professional nav button {
+      color: #4b4037;
+    }
+
+    .theme-professional nav button:hover {
+      background: rgba(var(--color-primary-rgb), 0.08) !important;
+      color: rgb(var(--color-primary-rgb)) !important;
+    }
+
+    .theme-professional nav button:has(.text-primary),
+    .theme-professional nav button:has(.text-secondary) {
+      background: rgb(var(--color-primary-rgb)) !important;
+      color: #ffffff !important;
+      box-shadow: none !important;
+    }
+
+    .theme-professional nav button:has(.text-primary) .material-symbols-outlined,
+    .theme-professional nav button:has(.text-secondary) .material-symbols-outlined {
+      color: #ffffff !important;
+    }
+
+    .theme-professional nav .material-symbols-outlined {
+      color: #6b6258;
+    }
+
+    .theme-professional nav h2 span {
+      color: inherit !important;
+    }
+
+    .theme-professional nav h2 {
+      color: #171717 !important;
+      text-shadow: none !important;
+    }
+
+    .theme-professional nav h2 span:first-child {
+      color: rgb(var(--color-primary-rgb)) !important;
+    }
+
+    .theme-professional nav h2+span {
+      color: #8a7c70 !important;
     }
 
     .animated-gradient-text {
@@ -143,65 +210,11 @@
     }
   </style>
 
-  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          fontFamily: {
-            display: ['var(--font-display)', 'sans-serif'],
-            body: ['var(--font-body)', 'sans-serif'],
-            'student-body': ['var(--font-student-body)', 'monospace'],
-            'student-label': ['var(--font-student-label)', 'monospace'],
-            'bodoni-moda': ['var(--font-portal-title)', 'serif'],
-            'syne': ['Syne', 'sans-serif'],
-            'syncopate': ['Syncopate', 'sans-serif'],
-            'orbitron': ['Orbitron', 'sans-serif'],
-            'rajdhani': ['Rajdhani', 'sans-serif'],
-            'archivo-black': ['"Archivo Black"', 'sans-serif'],
-          },
-          colors: {
-            'background': 'var(--color-background)',
-            'card-bg': 'var(--color-card-bg)',
-            'input-bg': 'var(--color-input-bg)',
-            'text-base': 'var(--color-text-base)',
-            'text-muted': 'var(--color-text-muted)',
-            'primary': 'rgb(var(--color-primary-rgb) / <alpha-value>)',
-            'secondary': 'rgb(var(--color-secondary-rgb) / <alpha-value>)',
-          },
-          boxShadow: {
-            'primary': '0 0 20px -5px rgb(var(--color-primary-rgb) / 0.2)',
-            'secondary': '0 0 20px -5px rgb(var(--color-secondary-rgb) / 0.2)',
-          }
-        }
-      }
-    }
-  </script>
-  <script type="importmap">
-{
-  "imports": {
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "react": "https://aistudiocdn.com/react@^19.2.0",
-    "@supabase/supabase-js": "https://aistudiocdn.com/@supabase/supabase-js@^2.76.0",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.25.0",
-    "@tanstack/react-query": "https://aistudiocdn.com/@tanstack/react-query@^5.51.1",
-    "react-hot-toast": "https://aistudiocdn.com/react-hot-toast@^2.4.1",
-    "@upstash/redis": "https://aistudiocdn.com/@upstash/redis@^1.33.0",
-    "@upstash/ratelimit": "https://aistudiocdn.com/@upstash/ratelimit@^1.2.0",
-    "xlsx": "https://aistudiocdn.com/xlsx@^0.18.5"
-  }
-}
-</script>
   <link rel="stylesheet" href="/index.css">
 </head>
 
 <body class="font-body text-text-base antialiased selection:bg-primary/30 selection:text-white">
   <div id="root"></div>
-  <script>
-    window.NEXT_PUBLIC_SUPABASE_URL = 'https://cglnflxypmtdexbbvjpe.supabase.co';
-    window.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNnbG5mbHh5cG10ZGV4YmJ2anBlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjM1NzgwMDQsImV4cCI6MjA3OTE1NDAwNH0.KZ0ZDsYcbXJj1nqd4n_Uh4M9-qTS9DONnPx8ePrMrm4';
-  </script>
   <script type="module" src="/index.tsx"></script>
 </body>
 

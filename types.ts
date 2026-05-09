@@ -53,7 +53,7 @@ export interface StudentProfile extends BaseProfile {
     status?: 'Registered' | 'Provisioned';
     linkedin_profile_url?: string;
     github_profile_url?: string;
-    verification_status?: 'pending' | 'verified';
+    verification_status?: 'pending' | 'pending_registry' | 'verified' | 'approved';
     skills?: string[];
     project_details?: string;
     experience_details?: string;
@@ -110,6 +110,14 @@ export interface Application {
     status: 'applied' | 'pending_verification' | 'verified' | 'rejected' | 'shortlisted' | 'qualified' | 'offered' | 'hired' | 'verifying';
     current_stage?: string;
     rejection_reason?: string | null;
+    candidate_notes?: string | null;
+    interview_at?: string | null;
+    interview_link?: string | null;
+    offer_package_lpa?: number | null;
+    offer_designation?: string | null;
+    offer_location?: string | null;
+    last_action_by?: string | null;
+    metadata?: Record<string, any> | null;
     created_at: string;
     opportunity?: Opportunity;
     student?: StudentProfile;

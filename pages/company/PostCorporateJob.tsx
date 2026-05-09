@@ -14,6 +14,18 @@ import { handleAiInvocationError } from '../../utils/errorHandlers.ts';
 
 const COLLEGES = ['Anurag University', 'CVR College of Engineering', 'VNR VJIET', 'GRIET'];
 
+const insertWithSchemaRetry = async (supabase: any, table: string, payload: Record<string, any>) => {
+    const { error } = await supabase.from(table).insert(payload);
+    if (!error) return;
+
+    const missingColumn = error.message?.match(/Could not find the '([^']+)' column/)?.[1];
+    if (missingColumn) {
+        throw new Error(`Database schema mismatch: ${table}.${missingColumn} is missing. Apply the latest Supabase migrations before posting opportunities.`);
+    }
+
+    throw error;
+};
+
 const PostCorporateJob: React.FC<{ user: CompanyProfile; onSuccess: () => void; onClose: () => void }> = ({ user, onSuccess, onClose }) => {
     const supabase = useSupabase();
     const queryClient = useQueryClient();
@@ -96,6 +108,7 @@ const PostCorporateJob: React.FC<{ user: CompanyProfile; onSuccess: () => void; 
             }
 
             const finalDescription = formData.description || `Refer to attached JD for ${formData.title} at ${user.company_name}.`;
+            const deadlineIso = sanitizeDate(formData.deadline);
 
             // CRITICAL: Sanitize all date fields to prevent "" syntax error in PG
             const payload = {
@@ -104,12 +117,16 @@ const PostCorporateJob: React.FC<{ user: CompanyProfile; onSuccess: () => void; 
                 description: finalDescription,
                 college: formData.college,
                 min_cgpa: formData.min_cgpa,
-                deadline: sanitizeDate(formData.deadline),
+                max_backlogs: 0,
+                passing_year: deadlineIso ? new Date(deadlineIso).getFullYear() : new Date().getFullYear(),
+                deadline: deadlineIso,
                 assessment_start_date: sanitizeDate(formData.assessment_start_date),
                 assessment_end_date: sanitizeDate(formData.assessment_end_date),
                 interview_start_date: sanitizeDate(formData.interview_start_date),
                 posted_by: user.id,
                 is_corporate: true,
+                type: 'job',
+                apply_link: formData.apply_link || '#',
                 allowed_departments: ['All'], 
                 status: 'active',
                 jd_file_url: jdFileUrl,
@@ -121,8 +138,7 @@ const PostCorporateJob: React.FC<{ user: CompanyProfile; onSuccess: () => void; 
                 }
             };
 
-            const { error } = await supabase.from('opportunities').insert(payload);
-            if (error) throw error;
+            await insertWithSchemaRetry(supabase, 'opportunities', payload);
         },
         onSuccess: () => {
             toast.success("Opportunity posted successfully!");

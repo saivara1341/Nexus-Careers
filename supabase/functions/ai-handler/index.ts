@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Institutional AI Handler - Zero Dependency
 // Optimized for Stability and Speed on Supabase Edge Runtime
 
@@ -15,9 +16,6 @@ const corsHeaders = {
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-application-name, x-user-agent',
 };
-
-const MODEL_ID = 'gemini-1.5-flash';
-const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1/models';
 
 console.log("AI Handler v4.3 Optimized");
 
@@ -64,8 +62,57 @@ const cleanJson = (text: string) => {
 };
 
 
-// --- GEMINI API CLIENT ---
+const partsToText = (contents: any[]) => {
+    return contents
+        .flatMap(item => item.parts || [])
+        .map((part: any) => {
+            if (part.text) return part.text;
+            if (part.inlineData) return `[Attached ${part.inlineData.mimeType || 'file'} omitted from text-only model prompt]`;
+            return '';
+        })
+        .filter(Boolean)
+        .join('\n\n');
+};
+
+async function generateWithOpenCompatible(contents: any[], systemInstruction?: string, jsonMode = false) {
+    const baseUrl = Deno.env.get('OPENAI_COMPATIBLE_BASE_URL') || 'http://host.docker.internal:11434/v1';
+    const apiKey = Deno.env.get('OPENAI_COMPATIBLE_API_KEY') || 'ollama';
+    const model = Deno.env.get('OPENAI_COMPATIBLE_MODEL') || Deno.env.get('OLLAMA_MODEL') || 'llama3.1:8b';
+    const response = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+            model,
+            temperature: 0.4,
+            max_tokens: 2000,
+            response_format: jsonMode ? { type: 'json_object' } : undefined,
+            messages: [
+                { role: 'system', content: systemInstruction || 'You are Nexus Careers AI. Follow requested schemas exactly.' },
+                { role: 'user', content: partsToText(contents) }
+            ]
+        })
+    });
+
+    if (!response.ok) {
+        throw new Error(`Open-compatible AI error ${response.status}: ${await response.text()}`);
+    }
+
+    const data = await response.json();
+    const text = data.choices?.[0]?.message?.content;
+    if (!text) throw new Error('Open-compatible AI returned an empty response.');
+    return text;
+}
+
+// --- AI CLIENT ---
 async function generateContent(apiKey: string, contents: any[], systemInstruction?: string, jsonMode = false) {
+    const provider = (Deno.env.get('AI_PROVIDER') || 'gemini').toLowerCase();
+    if (provider === 'openai-compatible' || provider === 'ollama' || provider === 'vllm') {
+        return generateWithOpenCompatible(contents, systemInstruction, jsonMode);
+    }
+
     const models = [
         'gemini-2.5-flash',
         'gemini-2.0-flash',
@@ -180,14 +227,16 @@ serve(async (req: Request) => {
             return createResponse({ success: false, error: 'Missing task' }, 400);
         }
 
-        const API_KEY = Deno.env.get('API_KEY');
-        if (!API_KEY || API_KEY.length < 10 || API_KEY.includes('PLACEHOLDER')) {
+        const provider = (Deno.env.get('AI_PROVIDER') || 'gemini').toLowerCase();
+        const API_KEY = Deno.env.get('API_KEY') || '';
+        const usesGemini = provider === 'gemini';
+        if (usesGemini && (!API_KEY || API_KEY.length < 10 || API_KEY.includes('PLACEHOLDER'))) {
             console.error("CRITICAL: API_KEY is missing/invalid.");
             return createResponse({
                 success: false,
                 version: "5.1",
                 error: 'AI Configuration Error',
-                message: 'Your Google Gemini API Key is missing or invalid. Please set it using: "supabase secrets set API_KEY=..."'
+                message: 'Gemini API key is missing or invalid. Set API_KEY, or set AI_PROVIDER=openai-compatible with OPENAI_COMPATIBLE_BASE_URL and OPENAI_COMPATIBLE_MODEL.'
             }, 200);
         }
 

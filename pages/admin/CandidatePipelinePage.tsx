@@ -9,7 +9,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { MarkdownRenderer } from '../../components/ai/MarkdownRenderer.tsx';
 import { handleAiInvocationError } from '../../utils/errorHandlers.ts';
-import * as XLSX from 'xlsx';
+import { downloadCsv } from '../../utils/csv.ts';
 import { runAI } from '../../services/aiClient.ts';
 
 const runDeepAnalysis = async (supabase: any, jobTitle: string, jobDescription: string, candidates: Application[]) => {
@@ -79,10 +79,7 @@ export const CandidatePipelinePage: React.FC<{ opportunity: Opportunity; onBack:
         }));
 
         const safeTitle = opportunity.title.replace(/[^a-z0-9]/gi, '_').substring(0, 30);
-        const ws = XLSX.utils.json_to_sheet(exportData);
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Pipeline");
-        XLSX.writeFile(wb, `${safeTitle}_Pipeline_Candidates.xlsx`);
+        downloadCsv(exportData, `${safeTitle}_Pipeline_Candidates.csv`);
         toast.success("Export successful!");
     };
 

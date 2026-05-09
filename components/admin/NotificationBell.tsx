@@ -43,7 +43,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ user, onClic
         fetchUnreadCount();
         
         const profile = user as any;
-        const channel = supabase.channel('notifications-bell')
+        const channel = supabase.channel(`notifications-bell-${profile.id}`)
             .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications' }, payload => {
                 const newNotification = payload.new as Notification;
                 
@@ -54,6 +54,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ user, onClic
                 if (collegeMatch && roleMatch && deptMatch) {
                      fetchUnreadCount();
                      toast('New Alert! Tap to view.', { 
+                        id: `new-notification-${newNotification.id}`,
                         icon: '🔔',
                         duration: 4000,
                         position: 'top-right'
@@ -68,7 +69,7 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ user, onClic
         return () => {
             supabase.removeChannel(channel);
         };
-    }, [user, supabase]);
+    }, [user.id, supabase]);
 
     return (
         <button 

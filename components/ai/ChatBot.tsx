@@ -9,11 +9,27 @@ import { useSupabase } from '../../contexts/SupabaseContext.tsx';
 import { useChatContext } from '../../contexts/ChatContext.tsx';
 import { AudioVisualizer } from '../ui/AudioVisualizer.tsx';
 import toast from 'react-hot-toast';
+import { getSpeechSynthesis, safeGetStorage, safeParseJson, safeSetStorage } from '../../utils/platform.ts';
 
 interface Message {
     role: 'user' | 'model';
     text: string;
 }
+
+type AgentCommand = {
+    type: 'NAVIGATE';
+    view: string;
+} | {
+    type: 'OPEN_SEARCH';
+} | {
+    type: 'EXPORT_DATA';
+} | {
+    type: 'START_LISTENING';
+} | {
+    type: 'APPLY_FIRST_VISIBLE_JOB';
+} | {
+    type: 'OPEN_FIRST_PIPELINE';
+};
 
 type AvatarType = 
     | 'nexus' | 'nova' | 'atlas' | 'titan' | 'stark' | 'luna' 
@@ -34,35 +50,105 @@ const AVATARS: Record<AvatarType, { icon: string, name: string, color: string, a
     orbit: { icon: '🛰️', name: 'Orbit Scan', color: 'blue', animation: 'animate-rocket-wake' }
 };
 
+const normalizeCommandText = (text: string) => text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+
+const inferLocalCommand = (text: string, userRole: string): { text: string; command: AgentCommand } | null => {
+    const normalized = normalizeCommandText(text);
+
+    if (/\b(search|find|look up)\b/.test(normalized)) {
+        return { text: 'Opening global search.', command: { type: 'OPEN_SEARCH' } };
+    }
+
+    if (/\b(export|download)\b/.test(normalized) && /\b(data|report|csv|registry|students?)\b/.test(normalized)) {
+        return { text: 'I will look for the export action on this screen.', command: { type: 'EXPORT_DATA' } };
+    }
+
+    if (userRole === 'student' && /\b(apply|submit)\b/.test(normalized) && /\b(first|top|visible|job|opportunity)\b/.test(normalized)) {
+        return { text: 'Applying to the first eligible visible job.', command: { type: 'APPLY_FIRST_VISIBLE_JOB' } };
+    }
+
+    if (userRole === 'company' && /\b(open|show|view|manage)\b/.test(normalized) && /\b(candidate|candidates|applicant|applicants|pipeline)\b/.test(normalized)) {
+        return { text: 'Opening the first candidate pipeline.', command: { type: 'OPEN_FIRST_PIPELINE' } };
+    }
+
+    const adminRoutes: Array<{ view: string; patterns: RegExp[]; label: string }> = [
+        { view: 'dashboard', label: 'Command Center', patterns: [/\b(command center|dashboard|overview|home)\b/] },
+        { view: 'students-hub', label: 'Students Hub', patterns: [/\b(students hub|student hub|students list|all students)\b/] },
+        { view: 'student-registry', label: 'Student Registry', patterns: [/\b(student registry|registry|bulk upload|student data)\b/] },
+        { view: 'student-performance', label: 'Performance Analytics', patterns: [/\b(performance|analytics|student intelligence|placements analytics|placement analytics)\b/] },
+        { view: 'opportunities', label: 'Placement Drives', patterns: [/\b(placement drives|opportunities|jobs|drives)\b/] },
+        { view: 'queries', label: 'Student Queries', patterns: [/\b(queries|student queries|questions)\b/] },
+        { view: 'ai-mentor', label: 'AI Mentor Lab', patterns: [/\b(ai mentor|mentor lab|research assistant)\b/] },
+        { view: 'logs', label: 'Forensic Logs', patterns: [/\b(logs|forensic|audit)\b/] },
+        { view: 'profile', label: 'Profile', patterns: [/\b(profile|my profile|account)\b/] },
+        { view: 'support', label: 'Support', patterns: [/\b(support|help|issue)\b/] },
+    ];
+
+    const companyRoutes: Array<{ view: string; patterns: RegExp[]; label: string }> = [
+        { view: 'dashboard', label: 'Company Dashboard', patterns: [/\b(dashboard|overview|home)\b/] },
+        { view: 'post', label: 'Post Job', patterns: [/\b(post job|new job|create job|draft role)\b/] },
+        { view: 'teams', label: 'Teams', patterns: [/\b(teams|team members|recruiters)\b/] },
+        { view: 'profile', label: 'Company Profile', patterns: [/\b(profile|company profile|account)\b/] },
+        { view: 'support', label: 'Support', patterns: [/\b(support|help|issue)\b/] },
+    ];
+
+    const studentRoutes: Array<{ view: string; patterns: RegExp[]; label: string }> = [
+        { view: 'dashboard', label: 'Student Dashboard', patterns: [/\b(dashboard|overview|home)\b/] },
+        { view: 'opportunities', label: 'Opportunities', patterns: [/\b(opportunities|jobs|drives|placements)\b/] },
+        { view: 'applications', label: 'My Applications', patterns: [/\b(applications|my applications|applied jobs)\b/] },
+        { view: 'toolkit', label: 'Career Toolkit', patterns: [/\b(toolkit|resume|career toolkit|mock interview)\b/] },
+        { view: 'profile', label: 'Profile', patterns: [/\b(profile|my profile|account)\b/] },
+        { view: 'support', label: 'Support', patterns: [/\b(support|help|issue)\b/] },
+    ];
+
+    const routes = userRole === 'company' ? companyRoutes : userRole === 'student' ? studentRoutes : adminRoutes;
+    const route = routes.find(item => item.patterns.some(pattern => pattern.test(normalized)));
+    if (!route) return null;
+
+    return {
+        text: `Opening ${route.label}.`,
+        command: { type: 'NAVIGATE', view: route.view }
+    };
+};
+
+const getCommandSuggestions = (userRole: string) => {
+    if (userRole === 'company') {
+        return ['open dashboard', 'post job', 'open candidates', 'open teams', 'open profile', 'open support'];
+    }
+    if (userRole === 'student') {
+        return ['open opportunities', 'apply first job', 'open applications', 'open career toolkit', 'open profile', 'open support'];
+    }
+    return ['open students hub', 'open performance analytics', 'open student registry', 'open placement drives', 'search students', 'export data'];
+};
+
 interface ChatBotProps {
     session: Session | null;
+    userRole?: string;
 }
 
-const ChatBot: React.FC<ChatBotProps> = ({ session }) => {
+const ChatBot: React.FC<ChatBotProps> = ({ session, userRole = 'user' }) => {
     const supabase = useSupabase();
     const { context: pageContext } = useChatContext();
     const [isOpen, setIsOpen] = useState(false);
     const [isWaking, setIsWaking] = useState(false);
     const [showAvatarSettings, setShowAvatarSettings] = useState(false);
     const [isVoiceOnlyMode, setIsVoiceOnlyMode] = useState(false);
-    const [isVoiceEnabled, setIsVoiceEnabled] = useState(() => localStorage.getItem('nexus_voice_output') !== 'false');
+    const [isVoiceEnabled, setIsVoiceEnabled] = useState(() => safeGetStorage(window.localStorage, 'nexus_voice_output', 'true') !== 'false');
     
     const [avatar, setAvatar] = useState<AvatarType>(() => {
-        const saved = localStorage.getItem('nexus_avatar') as AvatarType;
+        const saved = safeGetStorage(window.localStorage, 'nexus_avatar') as AvatarType;
         return (saved && AVATARS[saved]) ? saved : 'nexus';
     });
     
     const [pos, setPos] = useState(() => {
-        const saved = localStorage.getItem('nexus_chat_pos');
-        return saved ? JSON.parse(saved) : { x: window.innerWidth - 100, y: window.innerHeight - 150 };
+        const saved = safeGetStorage(window.localStorage, 'nexus_chat_pos');
+        return safeParseJson(saved, { x: window.innerWidth - 100, y: window.innerHeight - 150 });
     });
     const [isDragging, setIsDragging] = useState(false);
     const dragStartPos = useRef({ x: 0, y: 0 });
     const dragStartTime = useRef(0);
 
-    const [messages, setMessages] = useState<Message[]>([
-        { role: 'model', text: "Nexus Intelligence initialized. How can I assist you today?" }
-    ]);
+    const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
     const [isThinking, setIsThinking] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -70,13 +156,14 @@ const ChatBot: React.FC<ChatBotProps> = ({ session }) => {
     const [isListening, setIsListening] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
     const recognitionRef = useRef<any>(null);
-    const synthRef = useRef<SpeechSynthesis>(window.speechSynthesis);
+    const synthRef = useRef<SpeechSynthesis | null>(getSpeechSynthesis());
 
     useEffect(() => {
         const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
         if (SpeechRecognition) {
             recognitionRef.current = new SpeechRecognition();
             recognitionRef.current.continuous = false;
+            recognitionRef.current.interimResults = false;
             recognitionRef.current.lang = 'en-US';
             recognitionRef.current.onresult = (event: any) => {
                 const transcript = event.results[0][0].transcript;
@@ -84,6 +171,10 @@ const ChatBot: React.FC<ChatBotProps> = ({ session }) => {
             };
             recognitionRef.current.onstart = () => setIsListening(true);
             recognitionRef.current.onend = () => setIsListening(false);
+            recognitionRef.current.onerror = (event: any) => {
+                setIsListening(false);
+                if (event.error !== 'no-speech') toast.error('Could not capture voice command.');
+            };
         }
 
         return () => {
@@ -102,6 +193,12 @@ const ChatBot: React.FC<ChatBotProps> = ({ session }) => {
     }, [isOpen]);
 
     useEffect(() => {
+        if (isOpen && isVoiceOnlyMode && recognitionRef.current && !isListening && !isThinking && !isSpeaking) {
+            recognitionRef.current.start();
+        }
+    }, [isOpen, isVoiceOnlyMode, isListening, isThinking, isSpeaking]);
+
+    useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages, isThinking]);
 
@@ -115,7 +212,15 @@ const ChatBot: React.FC<ChatBotProps> = ({ session }) => {
         synthRef.current.speak(utterance);
     };
 
+    const dispatchAgentCommand = (command: AgentCommand) => {
+        window.dispatchEvent(new CustomEvent('NEXUS_AGENT_COMMAND', { detail: command }));
+    };
+
     const toggleMic = () => {
+        if (!recognitionRef.current) {
+            toast.error('Voice commands are not supported in this browser.');
+            return;
+        }
         if (isListening) {
             recognitionRef.current?.stop();
         } else {
@@ -136,7 +241,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ session }) => {
 
     const changeAvatar = (type: AvatarType) => {
         setAvatar(type);
-        localStorage.setItem('nexus_avatar', type);
+        safeSetStorage(window.localStorage, 'nexus_avatar', type);
         setShowAvatarSettings(false);
         toast(`Persona shifted to ${AVATARS[type].name}`, { icon: AVATARS[type].icon });
     };
@@ -144,7 +249,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ session }) => {
     const toggleVoiceOutput = () => {
         const newVal = !isVoiceEnabled;
         setIsVoiceEnabled(newVal);
-        localStorage.setItem('nexus_voice_output', String(newVal));
+        safeSetStorage(window.localStorage, 'nexus_voice_output', String(newVal));
         toast(`Auto-Speak: ${newVal ? 'ON' : 'OFF'}`);
     };
 
@@ -172,7 +277,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ session }) => {
             window.removeEventListener('mouseup', upHandler);
             window.removeEventListener('touchmove', moveHandler);
             window.removeEventListener('touchend', upHandler);
-            if (isDragging) localStorage.setItem('nexus_chat_pos', JSON.stringify(pos));
+            if (isDragging) safeSetStorage(window.localStorage, 'nexus_chat_pos', JSON.stringify(pos));
         };
 
         window.addEventListener('mousemove', moveHandler);
@@ -184,12 +289,18 @@ const ChatBot: React.FC<ChatBotProps> = ({ session }) => {
     const processInput = async (text: string) => {
         if (!text.trim() || isThinking || !session) return;
 
-        setIsThinking(true);
-        if (!isVoiceOnlyMode) setMessages(prev => [...prev, { role: 'user', text }]);
+        const currentDate = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+        const localCommand = inferLocalCommand(text, userRole);
+
         setInput('');
 
-        const userRole = session.user.user_metadata?.role || 'user';
-        const currentDate = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+        if (localCommand) {
+            dispatchAgentCommand(localCommand.command);
+            return;
+        }
+
+        setIsThinking(true);
+        if (!isVoiceOnlyMode) setMessages(prev => [...prev, { role: 'user', text }]);
 
         try {
             const response = await runAI({
@@ -210,7 +321,7 @@ const ChatBot: React.FC<ChatBotProps> = ({ session }) => {
                 if (isVoiceEnabled || isVoiceOnlyMode) speak(aiText);
 
                 if (response.command) {
-                    window.dispatchEvent(new CustomEvent('NEXUS_AGENT_COMMAND', { detail: response.command }));
+                    dispatchAgentCommand(response.command);
                 }
             }
         } catch (error: any) {
@@ -319,6 +430,25 @@ const ChatBot: React.FC<ChatBotProps> = ({ session }) => {
             ) : (
                 <>
                     <div className="flex-1 p-4 overflow-y-auto space-y-4 custom-scrollbar bg-black/20">
+                        {messages.length === 0 && !isThinking && (
+                            <div className="h-full flex flex-col justify-center gap-4">
+                                <div className="text-center">
+                                    <p className="text-xs uppercase tracking-[0.25em] text-primary font-bold">Command Mode</p>
+                                    <p className="text-xs text-text-muted mt-2">Speak or tap a command to control the app.</p>
+                                </div>
+                                <div className="grid grid-cols-1 gap-2">
+                                    {getCommandSuggestions(userRole).map(command => (
+                                        <button
+                                            key={command}
+                                            onClick={() => processInput(command)}
+                                            className="text-left text-xs uppercase tracking-wider font-bold bg-primary/10 hover:bg-primary/20 border border-primary/20 hover:border-primary/50 text-primary rounded-md px-3 py-2 transition-all"
+                                        >
+                                            {command}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                         {messages.map((msg, index) => (
                             <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                                 <div className={`max-w-[85%] rounded-lg px-4 py-2 ${msg.role === 'user' ? 'bg-primary/20 text-white border border-primary/30' : 'bg-card-bg text-text-base border border-white/10'}`}>

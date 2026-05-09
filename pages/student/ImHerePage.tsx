@@ -31,6 +31,7 @@ const fetchImHereRequests = async (supabase, college: string, page: number) => {
         .order('urgency', { ascending: true }) // Earliest deadline (urgency) first
         .range(from, to);
 
+    if (error?.code === '42P01') return { data: [], count: 0 };
     if (error) throw error;
     return { data: (data as ImHereRequest[]) || [], count: count || 0 };
 };
@@ -42,7 +43,7 @@ const findServiceMatches = async (supabase, keyword: string, college: string) =>
     // Simple keyword matching against service title and category
     const { data, error } = await supabase
         .from('campus_resources')
-        .select('id, item_name, service_rate, availability, lister:students!lister_id(id, name, mobile_number)')
+        .select('id, item_name, service_rate, availability, lister_id')
         .eq('college', college)
         .eq('listing_type', 'service')
         .or(`item_name.ilike.%${keyword}%,category.ilike.%${keyword}%`)
@@ -52,7 +53,20 @@ const findServiceMatches = async (supabase, keyword: string, college: string) =>
         console.error("Match error", error);
         return [];
     }
-    return data || [];
+
+    const listerIds = Array.from(new Set((data || []).map((match: any) => match.lister_id).filter(Boolean)));
+    if (listerIds.length === 0) return data || [];
+
+    const { data: listers } = await supabase
+        .from('students')
+        .select('id, name, mobile_number')
+        .in('id', listerIds);
+
+    const listerById = new Map((listers || []).map((lister: any) => [lister.id, lister]));
+    return (data || []).map((match: any) => ({
+        ...match,
+        lister: listerById.get(match.lister_id),
+    }));
 };
 
 const createImHereRequest = async (supabase, request: Omit<ImHereRequest, 'id' | 'created_at' | 'status'>) => {

@@ -14,7 +14,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(({ label, cl
       <div className="relative">
         <input
           ref={ref}
-          className={`w-full bg-input-bg border-2 border-primary/50 rounded-md p-3 text-base text-text-base placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-primary theme-gamified:focus:shadow-primary focus:border-transparent transition-all duration-300 ${endAdornment ? 'pr-12' : ''} ${className}`}
+          className={`w-full bg-input-bg border-2 border-primary/50 theme-professional:border-stone-200 theme-professional:shadow-sm rounded-md p-3 text-base text-text-base placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-primary theme-gamified:focus:shadow-primary focus:border-transparent transition-all duration-300 ${endAdornment ? 'pr-12' : ''} ${className}`}
           {...props}
         />
         {endAdornment && (

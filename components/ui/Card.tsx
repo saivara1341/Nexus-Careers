@@ -13,12 +13,12 @@ interface CardProps extends React.HTMLAttributes<HTMLDivElement> {
 export const Card: React.FC<CardProps> = ({ children, className = '', glow = 'primary', style, ...props }) => {
   const { theme } = useTheme();
 
-  const glowClass = glow === 'primary' ? 'hover:shadow-primary hover:border-primary/40' 
-                  : glow === 'secondary' ? 'hover:shadow-secondary hover:border-secondary/40' 
-                  : 'hover:border-white/20';
+  const glowClass = glow === 'primary' ? 'hover:shadow-primary hover:border-primary/40'
+                  : glow === 'secondary' ? 'hover:shadow-secondary hover:border-secondary/40'
+                  : theme === 'professional' ? 'hover:border-gray-300' : 'hover:border-white/20';
 
   const borderClass = theme === 'professional' 
-    ? 'border border-gray-800/60 shadow-xl shadow-black/10' 
+    ? 'border border-stone-200/90 shadow-lg shadow-orange-100/70'
     : 'border border-white/10';
   
   return (

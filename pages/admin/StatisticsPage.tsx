@@ -10,6 +10,7 @@ import { BarChart, BarChartData } from '../../components/charts/BarChart.tsx';
 import { Button } from '../../components/ui/Button.tsx';
 import toast from 'react-hot-toast';
 import { handleAiInvocationError } from '../../utils/errorHandlers.ts';
+import { downloadCsv } from '../../utils/csv.ts';
 
 interface StatisticsPageProps {
     user: AdminProfile;
@@ -29,25 +30,48 @@ const fetchDepartments = async (supabase, college: string): Promise<Department[]
         .select('id, name, college_name')
         .eq('college_name', college)
         .order('name', { ascending: true });
-    if (error) { handleAiInvocationError(error); throw error; }
+    if (error) {
+        if (error.code === '42P01' || error.message?.includes('does not exist')) return [];
+        handleAiInvocationError(error);
+        throw error;
+    }
     return data || [];
 };
 
 const fetchStatistics = async (supabase, user: AdminProfile, departmentFilter: string | 'all') => {
-    let studentQuery = supabase.from('students').select('*', { count: 'exact', head: true }).eq('college', user.college);
+    const activeDept = departmentFilter !== 'all' ? departmentFilter : user.department;
+    const analyticsQuery = supabase
+        .from('analytics_department_performance')
+        .select('*')
+        .eq('college', user.college);
+    if (activeDept) analyticsQuery.eq('department', activeDept);
+    const { data: analyticsRows, error: analyticsError } = await analyticsQuery;
+    if (!analyticsError && analyticsRows) {
+        const totals = analyticsRows.reduce((acc: any, row: any) => ({
+            studentCount: acc.studentCount + Number(row.total_students || 0),
+            applicationCount: acc.applicationCount + Number(row.applied_count || 0),
+            totalHires: acc.totalHires + Number(row.students_placed || 0),
+        }), { studentCount: 0, applicationCount: 0, totalHires: 0 });
+        const { count: opportunityCount } = await supabase.from('opportunities').select('*', { count: 'exact', head: true }).eq('college', user.college);
+        const engagementRate = totals.studentCount > 0 ? ((totals.applicationCount / (totals.studentCount * 5)) * 100).toFixed(1) : '0.0';
+        return { ...totals, opportunityCount: opportunityCount || 0, engagementRate: `${engagementRate}%` };
+    }
+
+    let studentQuery = supabase.from('student_registry').select('*', { count: 'exact', head: true }).eq('college', user.college);
     let opportunityQuery = supabase.from('opportunities').select('*', { count: 'exact', head: true }).eq('college', user.college);
     let appQuery = supabase.from('applications').select('*', { count: 'exact', head: true });
+    let hiresQuery = supabase.from('applications').select('*', { count: 'exact', head: true }).in('status', ['offered', 'hired']);
 
     // Filter by department if user is restricted or if a specific filter is selected
-    const activeDept = departmentFilter !== 'all' ? departmentFilter : user.department;
     if (activeDept) {
         studentQuery = studentQuery.eq('department', activeDept);
     }
 
-    const [studentRes, opportunityRes, appRes] = await Promise.all([
+    const [studentRes, opportunityRes, appRes, hiresRes] = await Promise.all([
         studentQuery,
         opportunityQuery,
-        appQuery
+        appQuery,
+        hiresQuery
     ]);
 
     if (studentRes.error) throw studentRes.error;
@@ -55,18 +79,32 @@ const fetchStatistics = async (supabase, user: AdminProfile, departmentFilter: s
     const studentCount = studentRes.count || 0;
     const opportunityCount = opportunityRes.count || 0;
     const applicationCount = appRes.count || 0;
+    const totalHires = hiresRes.count || 0;
 
     const engagementRate = studentCount > 0 ? ((applicationCount / (studentCount * 5)) * 100).toFixed(1) : '0.0';
 
-    return { studentCount, opportunityCount, applicationCount, engagementRate: `${engagementRate}%`, totalHires: 0 }; // totalHires will be handled separately if needed
+    return { studentCount, opportunityCount, applicationCount, engagementRate: `${engagementRate}%`, totalHires };
 };
 
 // Aggregates Placement Data: Group by Section if in Dept view, else by Dept
 const fetchPlacementStats = async (supabase: any, user: AdminProfile, departmentFilter: string | 'all'): Promise<BarChartData[]> => {
+    const activeDept = departmentFilter !== 'all' ? departmentFilter : user.department;
+    const analyticsQuery = supabase
+        .from('analytics_department_performance')
+        .select('department, students_placed')
+        .eq('college', user.college);
+    if (activeDept) analyticsQuery.eq('department', activeDept);
+    const { data: analyticsRows, error: analyticsError } = await analyticsQuery;
+    if (!analyticsError && analyticsRows) {
+        return analyticsRows.map((row: any) => ({
+            label: row.department || 'General',
+            value: Number(row.students_placed || 0)
+        })).sort((a, b) => b.value - a.value);
+    }
+
     // 1. Fetch relevant students
     let query = supabase.from('students').select('id, department, section').eq('college', user.college);
 
-    const activeDept = departmentFilter !== 'all' ? departmentFilter : user.department;
     if (activeDept) {
         query = query.eq('department', activeDept);
     }
@@ -113,6 +151,16 @@ const fetchPlacementStats = async (supabase: any, user: AdminProfile, department
 };
 
 const fetchTopRecruiters = async (supabase, college: string) => {
+    const { data: analyticsRows, error: analyticsError } = await supabase
+        .from('analytics_company_performance')
+        .select('company, posted_jobs')
+        .eq('college', college)
+        .order('posted_jobs', { ascending: false })
+        .limit(5);
+    if (!analyticsError && analyticsRows) {
+        return analyticsRows.map((row: any) => ({ name: row.company, count: row.posted_jobs }));
+    }
+
     const { data } = await supabase.from('opportunities').select('company, id').eq('college', college);
     if (!data) return [];
 
@@ -238,6 +286,35 @@ export const StatisticsPage: React.FC<StatisticsPageProps> = ({ user }) => {
         ? `Placements by Section (${user.department})`
         : `Placements by Department`;
 
+    const openAdminView = (view: string) => {
+        window.dispatchEvent(new CustomEvent('NEXUS_AGENT_COMMAND', { detail: { type: 'NAVIGATE', view } }));
+    };
+
+    const handleDownloadFullReport = async () => {
+        const { data, error } = await supabase
+            .from('analytics_student_outcomes')
+            .select('*')
+            .eq('college', user.college)
+            .order('department', { ascending: true });
+        if (error) {
+            toast.error('Analytics view unavailable. Apply the scale analytics migration first.');
+            return;
+        }
+        downloadCsv((data || []).map((row: any) => ({
+            Student: row.student_name,
+            Roll_Number: row.roll_number,
+            Email: row.email,
+            Department: row.department,
+            CGPA: row.cgpa,
+            Backlogs: row.backlogs,
+            Applied: row.applied_count,
+            Placed: row.placed_count,
+            Companies: row.placed_companies || '',
+            Max_Package_LPA: row.max_package_lpa || ''
+        })), `${user.college.replace(/[^a-z0-9]/gi, '_')}_placement_report.csv`);
+        toast.success('Placement report downloaded.');
+    };
+
     return (
         <div>
             <header className="mb-8 text-left">
@@ -283,45 +360,61 @@ export const StatisticsPage: React.FC<StatisticsPageProps> = ({ user }) => {
                 </div>
 
                 {/* Top Recruiters */}
-                <Card glow="secondary">
-                    <h3 className="font-display text-xl text-secondary mb-4">Top Recruiters</h3>
+                <Card glow="secondary" className="theme-professional:!bg-[#fffdf7] theme-professional:!border-[#eadccb]">
+                    <h3 className="font-display text-xl text-secondary theme-professional:text-[#0f766e] mb-4">Recruiters</h3>
                     <div className="space-y-4">
                         {topRecruiters.length === 0 && <p className="text-text-muted">No data yet.</p>}
                         {topRecruiters.map((r, i) => (
-                            <div key={i} className="flex justify-between items-center bg-black/20 p-3 rounded border border-white/5">
+                            <div key={i} className="flex justify-between items-center bg-black/20 theme-professional:!bg-[#fff8ed] p-3 rounded border border-white/5 theme-professional:!border-[#eadccb]">
                                 <div className="flex items-center gap-3">
-                                    <span className="font-bold text-gray-500 w-4">#{i + 1}</span>
+                                    <span className="font-bold text-text-muted theme-professional:text-[#8a7c70] w-4">#{i + 1}</span>
                                     <span className="font-bold text-text-base">{r.name}</span>
                                 </div>
-                                <span className="text-primary font-mono">{r.count} Jobs</span>
+                                <span className="text-primary theme-professional:text-[#c2410c] font-mono">{r.count}</span>
                             </div>
                         ))}
-                    </div>
-                    <div className="mt-6 pt-4 border-t border-white/10 text-center">
-                        <p className="text-xs text-text-muted">Based on opportunities posted</p>
                     </div>
                 </Card>
             </div>
 
             {/* Quick Actions / Search */}
-            <Card glow="none" className="p-6 bg-gradient-to-r from-card-bg to-primary/5">
-                <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-                    <div>
-                        <h2 className="font-display text-2xl text-white mb-1">Administrative Actions</h2>
-                        <p className="text-text-muted text-sm">Manage university data and placement drives.</p>
+            <Card glow="none" className="p-6 bg-gradient-to-r from-card-bg to-primary/5 theme-professional:!bg-[#fffdf7] theme-professional:!border-[#eadccb]">
+                <div className="flex flex-col gap-5">
+                    <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
+                        <div>
+                            <h2 className="font-display text-2xl text-text-base theme-professional:text-[#171717] mb-1">Quick Actions</h2>
+                        </div>
+                        <div className="flex flex-col sm:flex-row gap-3">
+                            {isUniversityLevelAdmin && (
+                                <select
+                                    value={selectedDepartment}
+                                    onChange={(e) => setSelectedDepartment(e.target.value)}
+                                    className="bg-black/30 theme-professional:!bg-[#fff8ed] border border-primary/30 theme-professional:!border-[#d9c7b5] rounded-md p-2 text-text-base outline-none focus:border-primary"
+                                >
+                                    <option value="all">Departments</option>
+                                    {departments.map(dept => <option key={dept.id} value={dept.name}>{dept.name}</option>)}
+                                </select>
+                            )}
+                            <Button variant="secondary" onClick={handleDownloadFullReport}>Download Report</Button>
+                        </div>
                     </div>
-                    <div className="flex gap-4">
-                        {isUniversityLevelAdmin && (
-                            <select
-                                value={selectedDepartment}
-                                onChange={(e) => setSelectedDepartment(e.target.value)}
-                                className="bg-black/30 border border-primary/30 rounded-md p-2 text-white outline-none focus:border-primary"
-                            >
-                                <option value="all">All Departments</option>
-                                {departments.map(dept => <option key={dept.id} value={dept.name}>{dept.name}</option>)}
-                            </select>
-                        )}
-                        <Button variant="secondary" onClick={() => toast("Report generation started...")}>Download Full Report</Button>
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                        <button onClick={() => openAdminView('students-hub')} className="bg-black/20 theme-professional:!bg-[#fff8ed] hover:bg-primary/10 theme-professional:hover:!bg-[#f6e7d7] border border-white/10 theme-professional:!border-[#eadccb] hover:border-primary/40 rounded-md p-3 text-left transition-all">
+                            <span className="material-symbols-outlined text-primary theme-professional:text-[#c2410c] text-xl">groups</span>
+                            <p className="font-bold text-sm mt-1">Students</p>
+                        </button>
+                        <button onClick={() => openAdminView('student-performance')} className="bg-black/20 theme-professional:!bg-[#fff8ed] hover:bg-primary/10 theme-professional:hover:!bg-[#f6e7d7] border border-white/10 theme-professional:!border-[#eadccb] hover:border-primary/40 rounded-md p-3 text-left transition-all">
+                            <span className="material-symbols-outlined text-secondary theme-professional:text-[#0f766e] text-xl">analytics</span>
+                            <p className="font-bold text-sm mt-1">Analytics</p>
+                        </button>
+                        <button onClick={() => openAdminView('student-registry')} className="bg-black/20 theme-professional:!bg-[#fff8ed] hover:bg-primary/10 theme-professional:hover:!bg-[#f6e7d7] border border-white/10 theme-professional:!border-[#eadccb] hover:border-primary/40 rounded-md p-3 text-left transition-all">
+                            <span className="material-symbols-outlined text-primary theme-professional:text-[#c2410c] text-xl">storage</span>
+                            <p className="font-bold text-sm mt-1">Registry</p>
+                        </button>
+                        <button onClick={() => openAdminView('opportunities')} className="bg-black/20 theme-professional:!bg-[#fff8ed] hover:bg-primary/10 theme-professional:hover:!bg-[#f6e7d7] border border-white/10 theme-professional:!border-[#eadccb] hover:border-primary/40 rounded-md p-3 text-left transition-all">
+                            <span className="material-symbols-outlined text-secondary theme-professional:text-[#0f766e] text-xl">business_center</span>
+                            <p className="font-bold text-sm mt-1">Drives</p>
+                        </button>
                     </div>
                 </div>
             </Card>

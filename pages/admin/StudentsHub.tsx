@@ -12,7 +12,7 @@ import { Pagination } from '../../components/ui/Pagination.tsx';
 import toast from 'react-hot-toast';
 import { GENDERS } from '../../types.ts';
 import { COMMON_DEPARTMENTS } from '../AuthPage.tsx';
-import * as XLSX from 'xlsx';
+import { readCsvFile } from '../../utils/csv.ts';
 import { logAdminAction } from '../../utils/adminLogger.ts';
 
 interface StudentsHubProps {
@@ -51,25 +51,11 @@ const fetchUnifiedStudents = async (supabase: any, user: AdminProfile, page: num
         query = query.eq('department', filters.department);
     }
 
-    if (filters.year !== 'All') {
-        query = query.eq('ug_passout_year', parseInt(filters.year));
-    }
-
-    if (filters.status === 'Active Backlogs') {
-        query = query.gt('backlogs', 0);
-    } else if (filters.status === 'High Achievers') {
-        query = query.gte('ug_cgpa', 8.5);
-    } else if (filters.status === 'At Risk') {
-        query = query.or('ug_cgpa.lt.5.0,backlogs.gt.2');
-    }
-    // Note: 'Predictive At-Risk' is handled on the mapping side since it requires application counts
-
     if (searchTerm) {
         query = query.or(`name.ilike.%${searchTerm}%,roll_number.ilike.%${searchTerm}%`);
     }
 
-    // Sort logic - prioritize roll_number if field is roll_number
-    query = query.order(sort.field, { ascending: sort.direction === 'asc' });
+    query = query.order('roll_number', { ascending: true });
 
     const { data: registryData, error: registryError, count } = await query.range(from, to);
     if (registryError) throw registryError;
@@ -123,24 +109,41 @@ const fetchUnifiedStudents = async (supabase: any, user: AdminProfile, page: num
             id: r.id,
             status: isActive ? 'Active' : 'Pending Signup',
             application_count: appCount,
-            isPredictiveAtRisk,
-            is_whitelisted: r.is_whitelisted
+            isPredictiveAtRisk
         };
     });
 
-    if (filters.status === 'Predictive At-Risk') {
+    if (filters.year !== 'All') {
+        mappedData = mappedData.filter(student => Number(student.ug_passout_year) === parseInt(filters.year));
+    }
+
+    if (filters.status === 'Active Backlogs') {
+        mappedData = mappedData.filter(student => (student.backlogs || 0) > 0);
+    } else if (filters.status === 'High Achievers') {
+        mappedData = mappedData.filter(student => (student.ug_cgpa || 0) >= 8.5);
+    } else if (filters.status === 'At Risk') {
+        mappedData = mappedData.filter(student => (student.ug_cgpa || 0) < 5.0 || (student.backlogs || 0) > 2);
+    } else if (filters.status === 'Predictive At-Risk') {
         mappedData = mappedData.filter(student => student.isPredictiveAtRisk);
     }
+
+    mappedData.sort((a: any, b: any) => {
+        const aValue = a[sort.field] ?? '';
+        const bValue = b[sort.field] ?? '';
+        if (typeof aValue === 'number' && typeof bValue === 'number') {
+            return sort.direction === 'asc' ? aValue - bValue : bValue - aValue;
+        }
+        return sort.direction === 'asc'
+            ? String(aValue).localeCompare(String(bValue))
+            : String(bValue).localeCompare(String(aValue));
+    });
 
     return { data: mappedData, count: count || 0 };
 };
 
 const updateStudentRegistry = async (supabase: any, registryId: string, updates: Partial<StudentProfile>, modifier: { id: string, name: string }) => {
     const payload = {
-        ...updates,
-        last_modified_by_id: modifier.id,
-        last_modified_by_name: modifier.name,
-        last_modified_at: new Date().toISOString()
+        ...updates
     };
     const { error } = await supabase.from('student_registry').update(payload).eq('id', registryId);
     if (error) throw error;
@@ -272,9 +275,7 @@ const StudentsHub: React.FC<StudentsHubProps> = ({ user }) => {
                         <h1 className="font-display text-2xl md:text-3xl font-bold uppercase mb-2 text-primary">
                             Students Hub
                         </h1>
-                        <p className="text-text-muted text-sm font-mono max-w-2xl italic">
-                            {user.department || 'Institutional'} registry and enrollment monitoring system.
-                        </p>
+                        <p className="text-text-muted text-sm">Manage student records and enrollment status.</p>
                     </div>
                     <div className="flex gap-2 bg-card-bg/50 p-1 rounded-lg border border-secondary/20 shrink-0">
                         <Button variant="secondary" onClick={() => setIsChoiceModalOpen(true)} className="text-xs py-2 px-4 shadow-lg">
@@ -345,7 +346,6 @@ const StudentsHub: React.FC<StudentsHubProps> = ({ user }) => {
                                     <div>
                                         <div className="flex items-center gap-2">
                                             <h3 className="font-bold text-primary text-lg">{student.name}</h3>
-                                            {student.is_whitelisted && <span className="material-symbols-outlined text-secondary text-sm" title="Whitelisted">verified</span>}
                                         </div>
                                         <p className="text-sm text-text-muted uppercase">{student.roll_number}</p>
                                     </div>
@@ -395,7 +395,6 @@ const StudentsHub: React.FC<StudentsHubProps> = ({ user }) => {
                                         <td className="p-3 text-sm font-student-label tracking-wider text-text-muted group-hover:text-text-base uppercase">{student.roll_number}</td>
                                         <td className="p-3 font-medium text-text-base group-hover:text-primary transition-colors flex items-center gap-2">
                                             {student.name}
-                                            {student.is_whitelisted && <span className="material-symbols-outlined text-secondary text-xs" title="Whitelisted">verified</span>}
                                         </td>
                                         <td className="p-3 text-sm">{student.department}</td>
                                         <td className="p-3 text-center">
@@ -461,7 +460,7 @@ const StudentsHub: React.FC<StudentsHubProps> = ({ user }) => {
                     >
                         <span className="material-symbols-outlined text-4xl text-secondary mb-2 group-hover:scale-110 transition-transform">upload_file</span>
                         <span className="font-bold text-text-base">Multiple Students</span>
-                        <span className="text-[10px] text-text-muted mt-1 uppercase">Bulk Excel Upload</span>
+                        <span className="text-[10px] text-text-muted mt-1 uppercase">Bulk CSV Upload</span>
                     </button>
                 </div>
             </Modal>
@@ -504,8 +503,9 @@ const StudentDetailModal: React.FC<any> = ({ isOpen, onClose, student, isEditMod
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         const payload = { ...formData };
-        if (payload.ug_cgpa) payload.ug_cgpa = parseFloat(payload.ug_cgpa as any);
-        if (payload.backlogs) payload.backlogs = parseInt(payload.backlogs as any);
+        delete (payload as any).ug_cgpa;
+        delete (payload as any).backlogs;
+        delete (payload as any).ug_passout_year;
         onSave(payload);
     };
 
@@ -586,10 +586,15 @@ const AddStudentModal: React.FC<any> = ({ isOpen, onClose, onSave, isSaving, col
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
         onSave({
-            ...formData,
-            ug_cgpa: parseFloat(formData.ug_cgpa),
-            backlogs: parseInt(formData.backlogs),
-            ug_passout_year: parseInt(formData.ug_passout_year)
+            name: formData.name,
+            roll_number: formData.roll_number,
+            email: formData.email,
+            department: formData.department,
+            ug_cgpa: parseFloat(formData.ug_cgpa) || 0,
+            cgpa: parseFloat(formData.ug_cgpa) || 0,
+            backlogs: parseInt(formData.backlogs) || 0,
+            ug_passout_year: parseInt(formData.ug_passout_year) || new Date().getFullYear() + 1,
+            passing_year: parseInt(formData.ug_passout_year) || new Date().getFullYear() + 1
         });
     };
 
@@ -623,14 +628,13 @@ const BulkImportModal: React.FC<any> = ({ isOpen, onClose, user }) => {
     const [rawStagedStudents, setRawStagedStudents] = useState<any[]>([]);
     const [isProcessing, setIsProcessing] = useState(false);
     const [uploadProgress, setUploadProgress] = useState(0);
-    const [shouldBulkWhitelist, setShouldBulkWhitelist] = useState(false);
+    const [validationIssues, setValidationIssues] = useState<string[]>([]);
 
     const parseFile = async (selectedFile: File) => {
         setIsProcessing(true);
+        setValidationIssues([]);
         try {
-            const data = await selectedFile.arrayBuffer();
-            const workbook = XLSX.read(data);
-            const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
+            const jsonData = await readCsvFile(selectedFile);
             if (jsonData.length < 2) throw new Error("Empty file.");
 
             const headers = (jsonData[0] as string[]).map(h => h ? h.toString().toLowerCase().replace(/[^a-z0-9]/g, '') : '');
@@ -654,26 +658,48 @@ const BulkImportModal: React.FC<any> = ({ isOpen, onClose, user }) => {
                 throw new Error("Missing required columns: Name, Roll No, or Email.");
             }
 
-            const staged = jsonData.slice(1).map((row: any) => {
-                const name = row[colMap.name];
-                const roll = row[colMap.roll]?.toString().trim();
-                const email = row[colMap.email]?.toString().trim();
-                if (!name || !roll || !email) return null;
+            const seenEmails = new Set<string>();
+            const seenRolls = new Set<string>();
+            const issues: string[] = [];
+            const getValue = (row: any, index: number) => index === -1 ? '' : row[index];
+
+            const staged = jsonData.slice(1).map((row: any, index: number) => {
+                const rowNumber = index + 2;
+                const name = getValue(row, colMap.name)?.toString().trim();
+                const roll = getValue(row, colMap.roll)?.toString().trim().toUpperCase();
+                const email = getValue(row, colMap.email)?.toString().trim().toLowerCase();
+                if (!name || !roll || !email) {
+                    issues.push(`Row ${rowNumber}: missing name, roll number, or email.`);
+                    return null;
+                }
+
+                if (seenEmails.has(email)) {
+                    issues.push(`Row ${rowNumber}: duplicate email ${email} skipped.`);
+                    return null;
+                }
+                if (seenRolls.has(roll)) {
+                    issues.push(`Row ${rowNumber}: duplicate roll number ${roll} skipped.`);
+                    return null;
+                }
+                seenEmails.add(email);
+                seenRolls.add(roll);
 
                 // Force department if HOD
-                const dept = user.role === 'HOD' ? user.department : (row[colMap.dept] || 'General');
+                const dept = user.role === 'HOD' ? user.department : (getValue(row, colMap.dept) || 'General');
+                const ugCgpa = parseFloat(getValue(row, colMap.cgpa)) || 0;
+                const backlogs = parseInt(getValue(row, colMap.backlogs)) || 0;
+                const passoutYear = parseInt(getValue(row, colMap.passout)) || new Date().getFullYear() + 1;
 
                 return {
                     name, roll_number: roll, email, college: user.college, department: dept,
-                    ug_cgpa: parseFloat(row[colMap.cgpa]) || 0,
-                    backlogs: parseInt(row[colMap.backlogs]) || 0,
-                    ug_passout_year: parseInt(row[colMap.passout]) || new Date().getFullYear(),
-                    is_whitelisted: shouldBulkWhitelist,
-                    last_modified_by_id: user.id,
-                    last_modified_by_name: user.name,
-                    last_modified_at: new Date().toISOString()
+                    ug_cgpa: ugCgpa,
+                    cgpa: ugCgpa,
+                    backlogs,
+                    ug_passout_year: passoutYear,
+                    passing_year: passoutYear
                 };
             }).filter(Boolean);
+            setValidationIssues(issues.slice(0, 12));
             setRawStagedStudents(staged);
         } catch (e: any) { toast.error(e.message); } finally { setIsProcessing(false); }
     };
@@ -707,8 +733,8 @@ const BulkImportModal: React.FC<any> = ({ isOpen, onClose, user }) => {
         <Modal isOpen={isOpen} onClose={onClose} title="Bulk Student Upload">
             {!rawStagedStudents.length ? (
                 <div className="p-4 space-y-4">
-                    <p className="text-xs text-text-muted">Upload an Excel or CSV file containing student name, roll number, and email. {user.role === 'HOD' ? `Students will be automatically assigned to ${user.department}.` : ''}</p>
-                    <input type="file" accept=".xlsx,.csv" onChange={(e) => {
+                    <p className="text-xs text-text-muted">Upload a CSV file containing student name, roll number, and email. {user.role === 'HOD' ? `Students will be automatically assigned to ${user.department}.` : ''}</p>
+                    <input type="file" accept=".csv" onChange={(e) => {
                         const f = e.target.files?.[0];
                         if (f) { setFile(f); parseFile(f); }
                     }} className="block w-full text-sm text-text-muted file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-bold file:bg-primary/20 file:text-primary hover:file:bg-primary/30" />
@@ -720,10 +746,14 @@ const BulkImportModal: React.FC<any> = ({ isOpen, onClose, user }) => {
                         <p className="text-sm font-bold text-primary">Found {rawStagedStudents.length} Students</p>
                         <p className="text-[10px] text-text-muted uppercase">Ready for institutional registration</p>
                     </div>
-                    <div className="flex items-center gap-3 bg-secondary/10 p-3 rounded-lg border border-secondary/20">
-                        <input type="checkbox" checked={shouldBulkWhitelist} onChange={(e) => setShouldBulkWhitelist(e.target.checked)} id="bulk_white" className="w-4 h-4 rounded border-secondary/50 bg-input-bg text-secondary focus:ring-secondary" />
-                        <label htmlFor="bulk_white" className="text-xs font-bold text-secondary cursor-pointer">Verify & Whitelist all students</label>
-                    </div>
+                    {validationIssues.length > 0 && (
+                        <div className="p-3 bg-yellow-500/5 rounded border border-yellow-500/20 max-h-32 overflow-y-auto custom-scrollbar">
+                            <p className="text-xs font-bold text-yellow-300 uppercase mb-2">Validation Notes</p>
+                            {validationIssues.map(issue => (
+                                <p key={issue} className="text-[10px] text-text-muted">{issue}</p>
+                            ))}
+                        </div>
+                    )}
                     {importMutation.isPending && (
                         <div className="w-full bg-white/5 h-1 rounded-full overflow-hidden">
                             <div className="bg-primary h-full transition-all duration-300" style={{ width: `${uploadProgress}%` }} />

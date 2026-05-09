@@ -52,17 +52,18 @@ const fetchAiAnalysis = async (supabase: any, opportunity: Opportunity): Promise
 export const OpportunityDetailModal: React.FC<OpportunityDetailModalProps> = ({ isOpen, onClose, opportunity }) => {
     const supabase = useSupabase();
     const { setContext } = useChatContext();
+    const deadlineLabel = opportunity.deadline ? new Date(opportunity.deadline).toLocaleDateString() : 'Open';
 
     useEffect(() => {
         if (isOpen) {
             setContext(`Viewing Opportunity: "${opportunity.title}" at "${opportunity.company}". 
             Description: ${opportunity.description.substring(0, 300)}...
             Min CGPA: ${opportunity.min_cgpa}.
-            Deadline: ${new Date(opportunity.deadline).toLocaleDateString()}.`);
+            Deadline: ${deadlineLabel}.`);
         } else {
             setContext("Opportunity Board");
         }
-    }, [isOpen, opportunity, setContext]);
+    }, [isOpen, opportunity, setContext, deadlineLabel]);
 
     const { data: aiAnalysis, isLoading: isLoadingAnalysis, isError: isAnalysisError, error: analysisError } = useQuery<Exclude<Opportunity['ai_analysis'], null>, Error>({
         queryKey: ['aiAnalysis', opportunity.id],
@@ -81,7 +82,7 @@ export const OpportunityDetailModal: React.FC<OpportunityDetailModalProps> = ({ 
     return (
         <Modal isOpen={isOpen} onClose={onClose} title={opportunity.title}>
             <h2 className="font-display text-2xl text-primary mb-2">{opportunity.company}</h2>
-            <p className="text-text-muted mb-4">Apply by: {new Date(opportunity.deadline).toLocaleDateString()}</p>
+            <p className="text-text-muted mb-4">Apply by: {deadlineLabel}</p>
             
             <h3 className="font-display text-xl text-secondary mb-2">Description</h3>
             <p className="text-text-base mb-4 whitespace-pre-wrap">{opportunity.description}</p>

@@ -25,6 +25,59 @@ interface ResourceExchangePageProps {
 
 const PAGE_SIZE = 18;
 
+const STUDENT_SELECT = 'id, name, personal_email, mobile_number, email';
+
+const attachStudents = async <T extends { lister_id?: string; requester_id?: string; offerer_id?: string }>(
+    supabase: any,
+    rows: T[],
+    fields: Array<'lister_id' | 'requester_id' | 'offerer_id'>,
+) => {
+    const ids = Array.from(new Set(rows.flatMap(row => fields.map(field => row[field]).filter(Boolean)))) as string[];
+    if (ids.length === 0) return rows;
+
+    const { data: students, error } = await supabase
+        .from('students')
+        .select(STUDENT_SELECT)
+        .in('id', ids);
+
+    if (error) return rows;
+
+    const studentById = new Map((students || []).map((student: any) => [student.id, student]));
+    return rows.map((row: any) => ({
+        ...row,
+        ...(row.lister_id ? { lister: studentById.get(row.lister_id) || row.lister } : {}),
+        ...(row.requester_id ? { requester: studentById.get(row.requester_id) || row.requester } : {}),
+        ...(row.offerer_id ? { offerer: studentById.get(row.offerer_id) || row.offerer } : {}),
+    }));
+};
+
+const attachRequestDetails = async (supabase: any, requests: any[]) => {
+    if (requests.length === 0) return requests;
+
+    const enriched = await attachStudents(supabase, requests, ['requester_id', 'offerer_id']);
+    const serviceIds = Array.from(new Set(requests.map(request => request.service_id).filter(Boolean)));
+    const requestIds = requests.map(request => request.id).filter(Boolean);
+
+    const [{ data: services }, { data: feedback }] = await Promise.all([
+        serviceIds.length
+            ? supabase.from('campus_resources').select('*').in('id', serviceIds)
+            : Promise.resolve({ data: [] }),
+        requestIds.length
+            ? supabase.from('service_feedback').select('id, service_request_id, rating, feedback_text').in('service_request_id', requestIds)
+            : Promise.resolve({ data: [] }),
+    ]);
+
+    const servicesWithListers = await attachStudents(supabase, services || [], ['lister_id']);
+    const serviceById = new Map((servicesWithListers || []).map((service: any) => [service.id, service]));
+    const feedbackByRequestId = new Map((feedback || []).map((item: any) => [item.service_request_id, item]));
+
+    return enriched.map((request: any) => ({
+        ...request,
+        service: serviceById.get(request.service_id) || request.service,
+        feedback: feedbackByRequestId.get(request.id) || request.feedback,
+    }));
+};
+
 interface ListFormState {
     item_name: string;
     description: string;
@@ -45,7 +98,7 @@ const fetchResources = async (supabase: any, college: string, page: number) => {
 
     const { data, error, count } = await supabase
         .from('campus_resources')
-        .select(`*, lister:students ( id, name, personal_email, mobile_number, email )`)
+        .select('*', { count: 'exact' })
         .eq('college', college)
         .eq('listing_type', 'service')
         .eq('is_moderated', true)
@@ -53,10 +106,12 @@ const fetchResources = async (supabase: any, college: string, page: number) => {
         .range(from, to);
 
     if (error) {
+        if (error.code === '42P01') return { data: [], count: 0 };
         handleAiInvocationError(error);
         throw error;
     }
-    return { data: data as any[] || [], count: count || 0 };
+    const rows = await attachStudents(supabase, data || [], ['lister_id']);
+    return { data: rows as any[] || [], count: count || 0 };
 };
 
 const fetchOfferedServices = async (supabase: any, userId: string, page: number) => {
@@ -65,17 +120,19 @@ const fetchOfferedServices = async (supabase: any, userId: string, page: number)
 
     const { data, error, count } = await supabase
         .from('campus_resources')
-        .select(`*, lister:students ( id, name, personal_email, mobile_number, email )`)
+        .select('*', { count: 'exact' })
         .eq('lister_id', userId)
         .eq('listing_type', 'service')
         .order('created_at', { ascending: false })
         .range(from, to);
 
     if (error) {
+        if (error.code === '42P01') return { data: [], count: 0 };
         handleAiInvocationError(error);
         throw error;
     }
-    return { data: data as any[] || [], count: count || 0 };
+    const rows = await attachStudents(supabase, data || [], ['lister_id']);
+    return { data: rows as any[] || [], count: count || 0 };
 };
 
 const fetchRequestedServices = async (supabase: any, userId: string, page: number) => {
@@ -84,20 +141,18 @@ const fetchRequestedServices = async (supabase: any, userId: string, page: numbe
 
     const { data, error, count } = await supabase
         .from('service_requests')
-        .select(`*, 
-            service:campus_resources ( *, lister:students ( id, name, personal_email, mobile_number, email ) ), 
-            requester:students!requester_id ( id, name, personal_email, mobile_number, email ), 
-            offerer:students!offerer_id ( id, name, personal_email, mobile_number, email ), 
-            feedback:service_feedback ( id, rating, feedback_text )`)
+        .select('*', { count: 'exact' })
         .eq('requester_id', userId)
         .order('created_at', { ascending: false })
         .range(from, to);
 
     if (error) {
+        if (error.code === '42P01') return { data: [], count: 0 };
         handleAiInvocationError(error);
         throw error;
     }
-    return { data: data as ServiceRequest[] || [], count: count || 0 };
+    const rows = await attachRequestDetails(supabase, data || []);
+    return { data: rows as ServiceRequest[] || [], count: count || 0 };
 };
 
 

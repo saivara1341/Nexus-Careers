@@ -15,6 +15,7 @@ import { Spinner } from '../../components/ui/Spinner.tsx';
 import { useSupabase } from '../../contexts/SupabaseContext.tsx';
 import { useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
+import { safeGetStorage, safeParseJson, safeSetStorage } from '../../utils/platform.ts';
 
 interface CompanyDashboardProps {
   onLogout: () => void;
@@ -41,12 +42,12 @@ const NavItem: React.FC<{ text: string, active: boolean, onClick: () => void, ic
             className={`
                 w-full text-left font-display text-base md:text-lg p-3 md:p-3.5 rounded-lg transition-all duration-200 relative flex items-center gap-3 md:gap-4 group
                 ${active 
-                    ? "bg-primary/10 text-primary shadow-[inset_3px_0_0_0_rgb(var(--color-primary-rgb))]" 
-                    : 'text-text-muted hover:text-text-base hover:bg-white/5'
+                    ? "bg-primary/10 text-primary shadow-[inset_3px_0_0_0_rgb(var(--color-primary-rgb))] theme-professional:bg-primary theme-professional:text-white theme-professional:shadow-sm"
+                    : 'text-text-muted hover:text-text-base hover:bg-white/5 theme-professional:text-text-base theme-professional:hover:bg-primary/5 theme-professional:hover:text-primary'
                 }
             `}
         >
-            <span className={`${active ? 'text-primary' : 'text-text-muted'}`}>{icon}</span>
+            <span className={`${active ? 'text-primary theme-professional:text-white' : 'text-text-muted theme-professional:text-text-muted'}`}>{icon}</span>
             <span className={`whitespace-nowrap truncate overflow-hidden transition-opacity duration-200 ${isSidebarCollapsed ? 'opacity-0 w-0' : 'opacity-100'}`}>
                 {text}
             </span>
@@ -59,7 +60,7 @@ export const CompanyDashboard: React.FC<CompanyDashboardProps> = ({ onLogout, us
     const queryClient = useQueryClient();
     const [activeView, setActiveView] = useState<CompanyView>('dashboard');
     const [selectedJob, setSelectedJob] = useState<Opportunity | null>(null);
-    const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => JSON.parse(localStorage.getItem('companySidebarCollapsed') || 'false'));
+    const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => safeParseJson(safeGetStorage(window.localStorage, 'companySidebarCollapsed', 'false'), false));
     const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
     // AI Agent States
@@ -73,6 +74,7 @@ export const CompanyDashboard: React.FC<CompanyDashboardProps> = ({ onLogout, us
                 const viewMap: Record<string, CompanyView> = {
                     'dashboard': 'dashboard',
                     'post': 'post-job',
+                    'post-job': 'post-job',
                     'teams': 'teams',
                     'profile': 'profile',
                     'support': 'support'
@@ -81,6 +83,26 @@ export const CompanyDashboard: React.FC<CompanyDashboardProps> = ({ onLogout, us
                     setActiveView(viewMap[command.view]);
                     toast(`Opening ${command.view}...`, { icon: '🤖' });
                 }
+            } else if (command.type === 'EXPORT_DATA') {
+                const exportButton = Array.from(document.querySelectorAll('button')).find(button => /export|download/i.test(button.textContent || '')) as HTMLButtonElement | undefined;
+                if (exportButton && !exportButton.disabled) {
+                    exportButton.click();
+                    toast.success('Export action started.');
+                } else {
+                    toast.error('Open a page with an available export button first.');
+                }
+            } else if (command.type === 'OPEN_FIRST_PIPELINE') {
+                setActiveView('dashboard');
+                window.setTimeout(() => {
+                    const pipelineButton = Array.from(document.querySelectorAll('button'))
+                        .find(button => /manage candidates/i.test(button.textContent || '') && !(button as HTMLButtonElement).disabled) as HTMLButtonElement | undefined;
+                    if (pipelineButton) {
+                        pipelineButton.click();
+                        toast.success('Opening candidate pipeline.');
+                    } else {
+                        toast.error('Post or select a job before opening a pipeline.');
+                    }
+                }, 650);
             } else if (command.type === 'DRAFT_OPPORTUNITY') {
                 setAiDraft({ ...command.data, company: user.company_name });
                 toast.success("Recruiter Agent has drafted a role!");
@@ -141,15 +163,15 @@ export const CompanyDashboard: React.FC<CompanyDashboardProps> = ({ onLogout, us
                     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 md:hidden" onClick={() => setIsMobileSidebarOpen(false)} />
                 )}
 
-                <nav className={`fixed inset-y-0 left-0 z-50 bg-card-bg/95 backdrop-blur-xl border-r border-primary/20 transform transition-transform duration-300 md:static md:translate-x-0 flex flex-col ${isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`} style={{ width: isSidebarCollapsed ? '70px' : '260px' }}>
+                <nav className={`fixed inset-y-0 left-0 z-50 bg-card-bg/95 backdrop-blur-xl border-r border-primary/20 theme-professional:border-stone-200 theme-professional:bg-card-bg theme-professional:shadow-xl theme-professional:shadow-orange-100/70 transform transition-transform duration-300 md:static md:translate-x-0 flex flex-col ${isMobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`} style={{ width: isSidebarCollapsed ? '70px' : '260px' }}>
                     <div className="flex items-center justify-between p-5 border-b border-primary/10 h-[70px]">
                         {!isSidebarCollapsed && (
                             <div className="flex flex-col truncate">
-                                <h2 className="font-display text-base font-black animated-gradient-text tracking-tighter leading-none uppercase">NEXUS CAREERS</h2>
+                                <h2 className="font-display text-base font-black animated-gradient-text tracking-tighter leading-none uppercase">Company Portal</h2>
                                 <span className="text-[8px] text-text-muted uppercase tracking-widest mt-0.5">Corporate Portal</span>
                             </div>
                         )}
-                        <button onClick={() => { setIsSidebarCollapsed(!isSidebarCollapsed); localStorage.setItem('companySidebarCollapsed', JSON.stringify(!isSidebarCollapsed)); }} className="hidden md:block mx-auto text-text-muted hover:text-white transition-colors">
+                        <button onClick={() => { setIsSidebarCollapsed(!isSidebarCollapsed); safeSetStorage(window.localStorage, 'companySidebarCollapsed', JSON.stringify(!isSidebarCollapsed)); }} className="hidden md:block mx-auto text-text-muted hover:text-white theme-professional:hover:text-primary transition-colors">
                              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={isSidebarCollapsed ? "M13 5l7 7-7 7m5-14l7 7-7 7" : "M11 19l-7-7 7-7m8 14l-7-7 7-7"} /></svg>
                         </button>
                     </div>
@@ -199,7 +221,7 @@ export const CompanyDashboard: React.FC<CompanyDashboardProps> = ({ onLogout, us
     function renderView() {
         switch (activeView) {
             case 'post-job': return <PostCorporateJob user={user} onSuccess={() => setActiveView('dashboard')} onClose={() => setActiveView('dashboard')} />;
-            case 'profile': return <CompanyProfilePage user={user} />;
+            case 'profile': return <CompanyProfilePage user={user} onLogout={onLogout} />;
             case 'teams': return <CorporateTeams user={user} />;
             case 'support': return <SupportSection user={user} />;
             case 'pipeline': return selectedJob && <CompanyPipelinePage opportunity={selectedJob} onBack={() => setActiveView('dashboard')} />;

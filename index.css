@@ -1,0 +1,6 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Vite entry stylesheet.
+   Core theme CSS currently lives in index.html while Tailwind is compiled into the build. */

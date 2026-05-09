@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Card } from '../ui/Card.tsx';
 import { Button } from '../ui/Button.tsx';
 import { Spinner } from '../ui/Spinner.tsx';
@@ -16,6 +16,7 @@ export const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ user, 
     const supabase = useSupabase();
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [isLoading, setIsLoading] = useState(true);
+    const hasShownLoadErrorRef = useRef(false);
 
     const fetchNotifications = async () => {
         setIsLoading(true);
@@ -45,8 +46,12 @@ export const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ user, 
         const { data, error } = await query;
         if (error) {
             console.error("Error fetching notifications:", error);
-            toast.error("Failed to load notifications.");
+            if (!hasShownLoadErrorRef.current) {
+                hasShownLoadErrorRef.current = true;
+                toast.error("Failed to load notifications.", { id: 'notifications-load-error' });
+            }
         } else {
+            hasShownLoadErrorRef.current = false;
             setNotifications(data || []);
         }
         setIsLoading(false);
@@ -79,7 +84,7 @@ export const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ user, 
             <div className="flex justify-between items-center mb-8">
                 <div>
                     <h1 className="font-display text-4xl text-primary mb-1">Notifications Center</h1>
-                    <p className="text-text-muted">Stay updated with institutional broadcasts and career alerts.</p>
+                    <p className="text-text-muted">Alerts and updates.</p>
                 </div>
                 <Button 
                     variant="ghost" 
@@ -162,7 +167,7 @@ export const NotificationsCenter: React.FC<NotificationsCenterProps> = ({ user, 
 
             <div className="mt-8 flex justify-center">
                 <Button variant="primary" onClick={onClose} className="w-full max-w-sm shadow-primary">
-                    Back to Command Center
+                    Back to Dashboard
                 </Button>
             </div>
         </div>

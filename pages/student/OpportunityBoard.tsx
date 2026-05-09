@@ -36,35 +36,40 @@ const fetchOpportunitiesAndApplications = async (supabase, user: StudentProfile,
     const from = (page - 1) * PAGE_SIZE;
     const to = from + PAGE_SIZE - 1;
     const today = new Date().toISOString();
+    const buildOppsQuery = (withDeadline = true) => {
+        let query = supabase
+            .from('opportunities')
+            .select('*', { count: 'exact' })
+            .eq('college', user.college)
+            .eq('status', 'active');
 
-    // Normalize user's department name for consistent comparison
-    const normalizedUserDepartment = normalizeDepartmentName(user.department);
-
-    let oppsQuery = supabase
-        .from('opportunities')
-        .select('*', { count: 'exact' })
-        .eq('college', user.college)
-        .eq('status', 'active')
-        .gte('deadline', today)
-        // Basic eligibility filtering on DB side
-        .lte('min_cgpa', user.ug_cgpa)
-        // Use normalized department in the .cs operator
-        .cs('allowed_departments', `{All,${normalizedUserDepartment}}`);
-
-    if (searchTerm) {
-        oppsQuery = oppsQuery.or(`title.ilike.%${searchTerm}%,company.ilike.%${searchTerm}%`);
-    }
+        if (withDeadline) query = query.gte('deadline', today);
+        if (searchTerm) {
+            query = query.or(`title.ilike.%${searchTerm}%,company.ilike.%${searchTerm}%`);
+        }
+        return query;
+    };
 
     // Execute both queries in parallel
     const [opportunitiesResponse, applicationsResponse] = await Promise.all([
-        oppsQuery.order('created_at', { ascending: false }).range(from, to),
+        buildOppsQuery(true).order('created_at', { ascending: false }).range(from, to),
         supabase.from('applications').select('opportunity_id').eq('student_id', user.id)
     ]);
 
-    const { data: oppsData, error: oppsError, count: dbCount } = opportunitiesResponse;
-    const { data: appsData, error: appsError } = applicationsResponse;
+    let { data: oppsData, error: oppsError, count: dbCount } = opportunitiesResponse;
+    let { data: appsData, error: appsError } = applicationsResponse;
 
+    if (oppsError?.message?.includes('deadline')) {
+        const fallback = await buildOppsQuery(false).order('created_at', { ascending: false }).range(from, to);
+        oppsData = fallback.data;
+        oppsError = fallback.error;
+        dbCount = fallback.count;
+    }
     if (oppsError) { handleAiInvocationError(oppsError); throw new Error(oppsError.message); }
+    if (appsError?.message?.includes('opportunity_id')) {
+        appsData = [];
+        appsError = null;
+    }
     if (appsError) { handleAiInvocationError(appsError); throw new Error(appsError.message); }
 
     return {
@@ -74,9 +79,18 @@ const fetchOpportunitiesAndApplications = async (supabase, user: StudentProfile,
     };
 };
 
-const logApplication = async (supabase, { userId, oppId }: { userId: string, oppId: string }) => {
-    const { error } = await supabase.from('applications').insert({ student_id: userId, opportunity_id: oppId });
+const logApplication = async (supabase, { userId, oppId, actorName }: { userId: string, oppId: string, actorName: string }) => {
+    const { error } = await supabase.from('applications').insert({ student_id: userId, opportunity_id: oppId, status: 'applied' });
     if (error) { handleAiInvocationError(error); throw error; }
+    await supabase.from('platform_audit_logs').insert({
+        actor_id: userId,
+        actor_role: 'student',
+        actor_name: actorName,
+        action: 'APPLICATION_SUBMITTED',
+        entity_type: 'application',
+        entity_id: oppId,
+        details: { opportunity_id: oppId }
+    });
 };
 
 const OpportunityBoard: React.FC<OpportunityBoardProps> = ({ user }) => {
@@ -192,9 +206,30 @@ const OpportunityBoard: React.FC<OpportunityBoardProps> = ({ user }) => {
 
     const count = opportunitiesBoardData?.count ?? 0;
     const totalPages = Math.ceil(count / PAGE_SIZE);
+    const hasVerifiedAcademicProfile = (user.verification_status === 'verified' || user.verification_status === 'approved')
+        && Number.isFinite(Number(user.ug_cgpa))
+        && Number(user.ug_cgpa) > 0
+        && !!user.department
+        && user.department !== 'General';
+
+    const getEligibility = (opp: Opportunity) => {
+        const reasons: string[] = [];
+        const normalizedUserDepartment = normalizeDepartmentName(user.department);
+        const allowed = opp.allowed_departments || [];
+        const studentCgpa = Number.isFinite(Number(user.ug_cgpa)) ? Number(user.ug_cgpa) : 0;
+        const maxBacklogs = Number.isFinite(Number((opp as any).max_backlogs)) ? Number((opp as any).max_backlogs) : 999;
+
+        if (!hasVerifiedAcademicProfile) reasons.push('Registry verification pending');
+        if (allowed.length > 0 && !allowed.includes('All') && !allowed.includes(normalizedUserDepartment || '')) {
+            reasons.push(`Department not eligible (${user.department || 'not synced'})`);
+        }
+        if (studentCgpa < (opp.min_cgpa || 0)) reasons.push(`CGPA ${studentCgpa.toFixed(2)} below ${Number(opp.min_cgpa || 0).toFixed(2)}`);
+        if ((user.backlogs || 0) > maxBacklogs) reasons.push(`Backlogs exceed limit (${maxBacklogs})`);
+        return { eligible: reasons.length === 0, reasons };
+    };
 
     const applyMutation = useMutation({
-        mutationFn: (vars: { userId: string, oppId: string }) => logApplication(supabase, vars),
+        mutationFn: (vars: { userId: string, oppId: string, actorName: string }) => logApplication(supabase, vars),
         onSuccess: () => {
             toast.success("Application logged! Upload proof in 'My Applications' to earn XP.");
             queryClient.invalidateQueries({ queryKey: ['opportunities'] });
@@ -205,6 +240,8 @@ const OpportunityBoard: React.FC<OpportunityBoardProps> = ({ user }) => {
 
     const autoApplyMutation = useMutation({
         mutationFn: async (opp: Opportunity) => {
+            const eligibility = getEligibility(opp);
+            if (!eligibility.eligible) throw new Error(eligibility.reasons.join('. '));
             // 1. Generate tailored pitch
             const { pitch } = await runAI({
                 task: 'application-tailoring',
@@ -227,6 +264,15 @@ const OpportunityBoard: React.FC<OpportunityBoardProps> = ({ user }) => {
 
             // 3. Award XP for handpicked application
             await supabase.rpc('award_xp', { user_id: user.id, xp_amount: 50 });
+            await supabase.from('platform_audit_logs').insert({
+                actor_id: user.id,
+                actor_role: 'student',
+                actor_name: user.name,
+                action: 'APPLICATION_AUTO_SUBMITTED',
+                entity_type: 'application',
+                entity_id: opp.id,
+                details: { opportunity_id: opp.id }
+            });
 
             return { pitch };
         },
@@ -248,8 +294,9 @@ const OpportunityBoard: React.FC<OpportunityBoardProps> = ({ user }) => {
         if (opp.allowed_departments.includes(normalizedUserDepartment || '') || opp.allowed_departments.includes('All')) score += 20;
 
         // 2. CGPA Buffer (10%)
-        if (user.ug_cgpa >= opp.min_cgpa + 1.0) score += 10;
-        else if (user.ug_cgpa >= opp.min_cgpa + 0.5) score += 5;
+        const studentCgpa = Number.isFinite(Number(user.ug_cgpa)) ? Number(user.ug_cgpa) : 0;
+        if (studentCgpa >= opp.min_cgpa + 1.0) score += 10;
+        else if (studentCgpa >= opp.min_cgpa + 0.5) score += 5;
 
         // 3. Skills Match (20%) - NEW AI Feature
         const jobSkills = opp.ai_analysis?.key_skills?.map(s => s.toLowerCase()) || [];
@@ -330,6 +377,20 @@ const OpportunityBoard: React.FC<OpportunityBoardProps> = ({ user }) => {
                 </div>
             </header>
 
+            {!hasVerifiedAcademicProfile && (
+                <Card glow="none" className="mb-6 border-yellow-500/30 bg-yellow-500/5">
+                    <div className="flex flex-col md:flex-row md:items-center gap-3">
+                        <span className="material-symbols-outlined text-yellow-300">verified_user</span>
+                        <div>
+                            <p className="font-bold text-yellow-100 text-sm uppercase tracking-wide">Academic profile pending verification</p>
+                            <p className="text-xs text-text-muted">
+                                Eligible jobs are filtered using verified CGPA and department data. Ask your placement office to sync your registry record before applying.
+                            </p>
+                        </div>
+                    </div>
+                </Card>
+            )}
+
             {/* AI Recommendations Section */}
             {
                 aiRecommendations.length > 0 && (
@@ -350,6 +411,7 @@ const OpportunityBoard: React.FC<OpportunityBoardProps> = ({ user }) => {
                                 const opp = rawOpportunities.find(o => o.id === rec.jobId);
                                 if (!opp) return null;
                                 const applied = myApplications.has(opp.id);
+                                const eligibility = getEligibility(opp);
                                 return (
                                     <Card key={rec.jobId} glow="secondary" className="border-secondary/30 relative overflow-hidden group">
                                         <div className="absolute top-0 right-0 bg-secondary text-black text-[10px] font-black px-2 py-1 rounded-bl-lg">
@@ -367,8 +429,9 @@ const OpportunityBoard: React.FC<OpportunityBoardProps> = ({ user }) => {
                                                 <Button
                                                     variant="secondary"
                                                     className="flex-1 text-xs h-9 uppercase font-black tracking-widest"
-                                                    disabled={applied || autoApplyMutation.isPending}
+                                                    disabled={applied || autoApplyMutation.isPending || !eligibility.eligible}
                                                     onClick={() => autoApplyMutation.mutate(opp)}
+                                                    title={eligibility.reasons.join('. ')}
                                                 >
                                                     {autoApplyMutation.isPending && autoApplyMutation.variables?.id === opp.id ? (
                                                         <Spinner className="w-4 h-4" />
@@ -403,6 +466,7 @@ const OpportunityBoard: React.FC<OpportunityBoardProps> = ({ user }) => {
                             {opportunities.map((opp, index) => {
                                 const matchScore = getMatchScore(opp);
                                 const applied = myApplications.has(opp.id);
+                                const eligibility = getEligibility(opp);
 
                                 return (
                                     <Card
@@ -428,18 +492,31 @@ const OpportunityBoard: React.FC<OpportunityBoardProps> = ({ user }) => {
                                             </div>
 
                                             <p className="text-text-muted text-sm line-clamp-3 mb-4">{opp.description}</p>
+                                            {!eligibility.eligible && (
+                                                <div className="mb-3 rounded border border-yellow-500/20 bg-yellow-500/5 p-2">
+                                                    <p className="text-[10px] font-bold uppercase tracking-wide text-yellow-200">Apply locked</p>
+                                                    <p className="text-[10px] text-text-muted">{eligibility.reasons.join(' • ')}</p>
+                                                </div>
+                                            )}
                                         </div>
 
                                         <div className="flex justify-between items-center mt-auto pt-4 border-t border-primary/20">
-                                            <span className="text-xs text-text-muted">Deadline: {new Date(opp.deadline).toLocaleDateString()}</span>
+                                            <span className="text-xs text-text-muted">Deadline: {opp.deadline ? new Date(opp.deadline).toLocaleDateString() : 'Open'}</span>
                                             <div className="flex gap-2">
                                                 <Button variant="ghost" className="text-xs h-8 px-2" onClick={() => setSelectedOpp(opp)}>Details</Button>
                                                 <Button
-                                                    onClick={() => applyMutation.mutate({ userId: user.id, oppId: opp.id })}
-                                                    disabled={applied || applyMutation.isPending}
+                                                    onClick={() => {
+                                                        if (!eligibility.eligible) {
+                                                            toast.error(eligibility.reasons.join('. '));
+                                                            return;
+                                                        }
+                                                        applyMutation.mutate({ userId: user.id, oppId: opp.id, actorName: user.name });
+                                                    }}
+                                                    disabled={applied || applyMutation.isPending || !eligibility.eligible}
+                                                    title={eligibility.reasons.join('. ')}
                                                     className={`text-xs h-8 px-3 ${applied ? 'bg-green-500/20 text-green-400 border-green-500/50' : ''}`}
                                                 >
-                                                    {applied ? 'Applied ✓' : 'Apply'}
+                                                    {applied ? 'Applied ✓' : eligibility.eligible ? 'Apply' : 'Locked'}
                                                 </Button>
                                             </div>
                                         </div>

@@ -14,9 +14,10 @@ import { handleAiInvocationError } from '../../utils/errorHandlers.ts';
 
 interface ProfilePageProps {
     user: StudentProfile;
+    onLogout?: () => void;
 }
 
-const ProfilePage: React.FC<ProfilePageProps> = ({ user }) => {
+const ProfilePage: React.FC<ProfilePageProps> = ({ user, onLogout }) => {
     const supabase = useSupabase();
     const queryClient = useQueryClient();
     const [activeTab, setActiveTab] = useState<'academics' | 'skills' | 'credentials' | 'settings'>('academics');
@@ -40,6 +41,7 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ user }) => {
         queryKey: ['studentCertifications', user.id],
         queryFn: async () => {
             const { data, error } = await supabase.from('student_certifications').select('*').eq('student_id', user.id);
+            if (error?.code === '42P01') return [];
             if (error) throw error;
             return data as StudentCertification[];
         }
@@ -49,6 +51,7 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ user }) => {
         queryKey: ['studentAchievements', user.id],
         queryFn: async () => {
             const { data, error } = await supabase.from('student_achievements').select('*').eq('student_id', user.id);
+            if (error?.code === '42P01') return [];
             if (error) throw error;
             return data as StudentAchievement[];
         }
@@ -132,12 +135,20 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ user }) => {
     return (
         <div className="max-w-7xl mx-auto pb-20 font-body">
             <header className="mb-8">
-                <h1 className="font-display text-2xl md:text-3xl font-bold uppercase mb-2 text-primary">
-                    Student Profile
-                </h1>
-                <p className="text-text-muted text-sm font-mono max-w-2xl italic">
-                    Universal student identity, academic credentials, and skill validation engine.
-                </p>
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                        <h1 className="font-display text-2xl md:text-3xl font-bold uppercase mb-2 text-primary">
+                            Student Profile
+                        </h1>
+                        <p className="text-text-muted text-sm">Academic details, skills, and account settings.</p>
+                    </div>
+                    {onLogout && (
+                        <Button onClick={onLogout} variant="ghost" className="self-start flex items-center gap-2">
+                            <span className="material-symbols-outlined text-lg">logout</span>
+                            Logout
+                        </Button>
+                    )}
+                </div>
             </header>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

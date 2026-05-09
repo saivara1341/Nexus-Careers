@@ -26,17 +26,18 @@ const fetchCalendarEvents = async (supabase: any, user: StudentProfile): Promise
     const today = new Date().toISOString();
 
     // 1. Fetch Deadlines
-    const { data: opps } = await supabase
+    let { data: opps, error: oppsError } = await supabase
         .from('opportunities')
         .select('id, title, company, deadline')
         .eq('college', user.college)
         .eq('status', 'active')
         .gte('deadline', today);
+    if (oppsError?.message?.includes('deadline')) opps = [];
 
     // 2. Fetch Interviews (simulated logic based on pipeline)
     const { data: apps } = await supabase
         .from('applications')
-        .select('opportunity:opportunities(title, company), status, current_stage, updated_at')
+        .select('opportunity:opportunities!applications_opportunity_id_fkey(title, company), status, current_stage, updated_at')
         .eq('student_id', user.id)
         .in('current_stage', ['Interview', 'Technical Interview', 'HR Interview']);
 
@@ -74,7 +75,8 @@ const CalendarPage: React.FC<CalendarPageProps> = ({ user }) => {
 
     const { data: events = [], isLoading } = useQuery({
         queryKey: ['calendar', user.id],
-        queryFn: () => fetchCalendarEvents(supabase, user)
+        queryFn: () => fetchCalendarEvents(supabase, user),
+        retry: false
     });
 
     const optimizeMutation = useMutation({

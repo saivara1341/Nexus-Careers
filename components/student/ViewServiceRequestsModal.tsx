@@ -22,13 +22,38 @@ interface ViewServiceRequestsModalProps {
 const fetchServiceRequestsForOfferedService = async (supabase, serviceId: string, offererId: string): Promise<ServiceRequest[]> => {
     const { data, error } = await supabase
         .from('service_requests')
-        .select(`*, requester:students(id, name, personal_email, mobile_number, email), service:campus_resources(id, item_name), feedback:service_feedback(id, rating, feedback_text)`)
+        .select('*')
         .eq('service_id', serviceId)
         .eq('offerer_id', offererId) // Ensure only requests for *this* offerer's service
         .order('created_at', { ascending: false });
     
+    if (error?.code === '42P01') return [];
     if (error) throw error;
-    return data as ServiceRequest[] || [];
+
+    const requests = data || [];
+    if (requests.length === 0) return [];
+
+    const requesterIds = Array.from(new Set(requests.map((request: any) => request.requester_id).filter(Boolean)));
+    const requestIds = requests.map((request: any) => request.id).filter(Boolean);
+
+    const [{ data: requesters }, { data: feedback }] = await Promise.all([
+        requesterIds.length
+            ? supabase.from('students').select('id, name, personal_email, mobile_number, email').in('id', requesterIds)
+            : Promise.resolve({ data: [] }),
+        requestIds.length
+            ? supabase.from('service_feedback').select('id, service_request_id, rating, feedback_text').in('service_request_id', requestIds)
+            : Promise.resolve({ data: [] }),
+    ]);
+
+    const requesterById = new Map((requesters || []).map((requester: any) => [requester.id, requester]));
+    const feedbackByRequestId = new Map((feedback || []).map((item: any) => [item.service_request_id, item]));
+
+    return requests.map((request: any) => ({
+        ...request,
+        service: { id: serviceId, item_name: request.service?.item_name },
+        requester: requesterById.get(request.requester_id) || request.requester,
+        feedback: feedbackByRequestId.get(request.id) || request.feedback,
+    })) as ServiceRequest[];
 };
 
 export const ViewServiceRequestsModal: React.FC<ViewServiceRequestsModalProps> = ({

@@ -52,6 +52,9 @@ export const MockTestPage: React.FC<{ user: StudentProfile }> = ({ user }) => {
         setIsGenerating(true);
 
         try {
+            if (!navigator.mediaDevices?.getUserMedia) {
+                throw new Error('Camera and microphone are not supported on this device.');
+            }
             const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
             streamRef.current = stream;
             if (videoRef.current) videoRef.current.srcObject = stream;

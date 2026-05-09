@@ -9,6 +9,7 @@ import { GENDERS, UNIVERSITY_LEVEL_ROLES, normalizeDepartmentName } from '../typ
 import { useQuery } from '@tanstack/react-query';
 import { Spinner } from '../components/ui/Spinner.tsx';
 import toast from 'react-hot-toast';
+import { useTheme } from '../hooks/useTheme.tsx';
 
 const fetchDepartments = async (supabase, college: string): Promise<Department[]> => {
   const { data, error } = await supabase
@@ -36,6 +37,8 @@ const PUBLIC_EMAIL_PROVIDERS = ['gmail.com', 'yahoo.com', 'outlook.com', 'hotmai
 
 const AuthPage: React.FC = () => {
   const supabase = useSupabase();
+  const { theme, toggleTheme } = useTheme();
+  const isLightMode = theme === 'professional';
   const [isLogin, setIsLogin] = useState(true);
   const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [userType, setUserType] = useState<'student' | 'admin' | 'company'>('student');
@@ -74,6 +77,15 @@ const AuthPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
+  const uploadVerificationFile = async (userId: string, file: File, category: 'admin' | 'company') => {
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const filePath = `verification/${category}/${userId}/${Date.now()}_${safeName}`;
+    const { error: uploadError } = await supabase.storage.from('student-credentials').upload(filePath, file, { upsert: false });
+    if (uploadError) throw uploadError;
+    const { data } = supabase.storage.from('student-credentials').getPublicUrl(filePath);
+    return data.publicUrl;
+  };
+
   useEffect(() => {
     if (userType !== 'admin') return;
     const isUnivScope = department === UNIVERSITY_ADMIN_DEPT;
@@ -105,7 +117,7 @@ const AuthPage: React.FC = () => {
           options.data.college = college;
           options.data.role = adminRole;
           options.data.department = department === UNIVERSITY_ADMIN_DEPT ? null : department;
-          isVerified = true;
+          isVerified = false;
         } else if (userType === 'company') {
           const domain = email.split('@')[1];
           if (domain && PUBLIC_EMAIL_PROVIDERS.includes(domain.toLowerCase())) throw new Error("Corporate security: Use your official work email.");
@@ -118,29 +130,37 @@ const AuthPage: React.FC = () => {
           }
 
           options.data = { role: 'company', company_name: companyName, industry, company_role: companyRole, employee_id: employeeId };
-
-          // As requested, set is_verified to true for all company sign-ups
-          isVerified = true;
-
-          // TODO: Upload idFile (incorporation) or employeeIdProofFile if needed
-          // For now, just handling the error messages if files are missing based on role
+          isVerified = false;
         } else { // Student
           const rollNumber = email.split('@')[0];
-          const { data: registryStudent, error: registryError } = await supabase.from('student_registry').select('*').or(`email.ilike.${email},roll_number.ilike.${rollNumber}`).single();
-          if (registryError || !registryStudent) throw new Error('Institutional Registry: Profile not whitelisted.');
           options.data = {
             role: 'student',
-            college: registryStudent.college,
-            // Normalize department name to prevent case-sensitive mismatches
-            department: normalizeDepartmentName(registryStudent.department) || 'General',
-            roll_number: registryStudent.roll_number
+            college,
+            roll_number: rollNumber
           };
           isVerified = true;
         }
 
         options.data.is_verified = isVerified;
-        const { error: signUpError } = await supabase.auth.signUp({ email, password, options });
+        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({ email, password, options });
         if (signUpError) throw signUpError;
+
+        const proofFile = userType === 'company'
+          ? (companyRole === 'Founder' ? idFile : employeeIdProofFile)
+          : userType === 'admin'
+            ? idFile
+            : null;
+
+        if (proofFile && signUpData.user) {
+          const verificationFileUrl = await uploadVerificationFile(signUpData.user.id, proofFile, userType === 'company' ? 'company' : 'admin');
+          const profileTable = userType === 'company' ? 'companies' : 'admins';
+          await supabase.auth.updateUser({ data: { verification_file_url: verificationFileUrl } });
+          const { error: profileUpdateError } = await supabase
+            .from(profileTable)
+            .update({ verification_file_url: verificationFileUrl })
+            .eq('id', signUpData.user.id);
+          if (profileUpdateError && profileUpdateError.code !== 'PGRST116') throw profileUpdateError;
+        }
 
         if (isVerified) {
           setMessage("Access Cleared. Booting Nexus Interface...");
@@ -156,12 +176,21 @@ const AuthPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center p-4">
+    <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-background">
+      <button
+        type="button"
+        onClick={toggleTheme}
+        className="fixed right-4 top-4 z-20 h-11 px-3 rounded-lg border border-primary/30 bg-card-bg/90 backdrop-blur-xl text-primary hover:bg-primary/10 transition-all flex items-center gap-2 text-xs font-bold uppercase tracking-wider"
+        aria-label={isLightMode ? 'Switch to dark mode' : 'Switch to light mode'}
+      >
+        <span className="material-symbols-outlined text-xl">{isLightMode ? 'dark_mode' : 'light_mode'}</span>
+        <span className="hidden sm:inline">{isLightMode ? 'Dark' : 'Light'}</span>
+      </button>
       <div className="text-center mb-8 w-full max-w-4xl px-4">
         <h1 className="font-display text-4xl sm:text-6xl md:text-7xl lg:text-8xl mb-2 font-black leading-none whitespace-nowrap uppercase tracking-tighter animated-gradient-text">
           NEXUS CAREERS
         </h1>
-        <p className="font-display text-xs md:text-sm text-text-muted max-w-lg mx-auto uppercase tracking-[0.4em] font-bold opacity-70">Institutional Career Gateway</p>
+        <p className="font-display text-xs md:text-sm text-text-muted max-w-lg mx-auto uppercase tracking-[0.3em] font-bold opacity-70">Careers Portal</p>
       </div>
 
       <Card className="w-full max-w-md !p-8" glow="primary">
@@ -198,10 +227,6 @@ const AuthPage: React.FC = () => {
                     <select value={adminRole} onChange={(e) => setAdminRole(e.target.value as AdminRole)} className="w-full bg-input-bg border-2 border-primary/50 rounded-md p-3 text-base text-text-base focus:outline-none focus:ring-2 focus:ring-primary">
                       {department === UNIVERSITY_ADMIN_DEPT ? UNIVERSITY_LEVEL_ROLES.map(role => <option key={role} value={role}>{role}</option>) : departmentScopedRoles.map(role => <option key={role} value={role}>{role}</option>)}
                     </select>
-                  </div>
-                  <div className="bg-black/40 p-4 rounded-lg border border-primary/30 mt-4 group">
-                    <label className="block text-primary font-display text-sm font-bold uppercase mb-2">Identification Proof</label>
-                    <input type="file" accept="image/*" onChange={e => setIdFile(e.target.files?.[0] || null)} className="w-full text-xs text-text-muted file:mr-4 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-[10px] file:bg-primary/20 file:text-primary file:font-bold" />
                   </div>
                 </>
               )}
