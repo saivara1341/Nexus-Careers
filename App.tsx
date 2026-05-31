@@ -80,9 +80,65 @@ const uploadVerificationFile = async (supabase: SupabaseClient, userId: string, 
   return data.publicUrl;
 };
 
+const buildProfileFromSessionMetadata = (session: Session): AdminProfile | StudentProfile | CompanyProfile | null => {
+  const metadata = session.user.user_metadata || {};
+  const role = metadata.account_type || metadata.role;
+  const name = metadata.full_name || metadata.name || session.user.email?.split('@')[0] || 'User';
+  const email = session.user.email || '';
+  const createdAt = session.user.created_at || new Date().toISOString();
+
+  if (!role) return null;
+
+  if (role === 'student') {
+    return {
+      id: session.user.id,
+      name,
+      email,
+      created_at: createdAt,
+      role: 'student',
+      college: metadata.college || 'Anurag University',
+      department: normalizeDepartmentName(metadata.department || 'General') || 'General',
+      roll_number: metadata.roll_number || email.split('@')[0] || `STU-${session.user.id.slice(0, 6).toUpperCase()}`,
+      ug_cgpa: 0,
+      backlogs: 0,
+      ug_passout_year: new Date().getFullYear() + 1,
+      verification_status: 'pending_registry',
+      level: 1,
+      xp: 0,
+      xp_to_next_level: 100
+    };
+  }
+
+  if (role === 'company') {
+    return {
+      id: session.user.id,
+      name,
+      email,
+      created_at: createdAt,
+      role: 'company',
+      company_name: metadata.company_name || name,
+      industry: metadata.industry || 'Technology',
+      verification_file_url: metadata.verification_file_url || undefined
+    };
+  }
+
+  return {
+    id: session.user.id,
+    name,
+    email,
+    created_at: createdAt,
+    role: (metadata.role || 'admin') as AdminProfile['role'],
+    department: metadata.department || undefined,
+    college: metadata.college || 'Anurag University',
+    verification_file_url: metadata.verification_file_url || undefined
+  };
+};
+
 const fetchUserProfile = async (supabase: SupabaseClient): Promise<{ session: Session | null; profile: AdminProfile | StudentProfile | CompanyProfile | DeveloperProfile | null }> => {
+  let currentSession: Session | null = null;
   try {
     const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    currentSession = session;
     if (sessionError || !session?.user) {
       return { session: null, profile: null };
     }
@@ -157,10 +213,17 @@ const fetchUserProfile = async (supabase: SupabaseClient): Promise<{ session: Se
     const companyData = companyResult.data;
     if (companyData) return { session, profile: { ...companyData, role: 'company' } };
 
+    const metadataProfile = buildProfileFromSessionMetadata(session);
+    if (metadataProfile) return { session, profile: metadataProfile };
+
     return { session, profile: null };
   } catch (e) {
     console.error("Profile Fetch Error:", e);
-    return { session: null, profile: null };
+    if (currentSession?.user) {
+      const metadataProfile = buildProfileFromSessionMetadata(currentSession);
+      if (metadataProfile) return { session: currentSession, profile: metadataProfile };
+    }
+    return { session: currentSession, profile: null };
   }
 };
 
@@ -516,10 +579,8 @@ const AppContent: React.FC = () => {
           // Fix: Extracting the actual error message instead of letting it default to [object Object]
           const errorMessage = error?.message || error?.details || "Database connection timed out.";
           console.error("Auto-creation failed:", errorMessage, error);
-          const publicMessage = /schema|column|relation|policy|permission|RLS|row-level/i.test(errorMessage)
-            ? 'Identity synchronization is blocked by a server configuration issue. Please contact the platform administrator.'
-            : errorMessage;
-          setSyncError(publicMessage);
+          setSyncError(null);
+          await queryClient.invalidateQueries({ queryKey: ['userProfile'] });
         } finally {
           setIsCreatingProfile(false);
         }
@@ -531,11 +592,6 @@ const AppContent: React.FC = () => {
   const handleLogout = async () => {
     setSyncError(null);
     await supabase.auth.signOut();
-  };
-
-  const handleRetrySync = () => {
-    setSyncError(null);
-    queryClient.invalidateQueries({ queryKey: ['userProfile'] });
   };
 
   const handleProfileCompletion = () => {
@@ -560,29 +616,7 @@ const AppContent: React.FC = () => {
     return <SplashScreen />;
   }
 
-  if (session && !userProfile && syncError) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-4 bg-background text-center">
-        <Card glow="none" className="max-w-md p-8 border-red-500/50 shadow-2xl bg-red-500/5">
-          <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-6">
-            <span className="material-symbols-outlined text-red-500 text-4xl">sync_problem</span>
-          </div>
-          <h1 className="text-2xl text-red-400 mb-4 font-display font-bold uppercase tracking-tighter">Synchronization Blocked</h1>
-          <p className="text-text-muted text-sm mb-8 leading-relaxed">
-            Nexus failed to link your security token with our database records.
-            <br /><br />
-            <span className="text-xs opacity-60">Status:</span>
-            <br />
-            <code className="text-[10px] text-red-300 bg-red-900/20 p-2 block mt-1 rounded break-all whitespace-pre-wrap">{syncError}</code>
-          </p>
-          <div className="flex flex-col gap-3">
-            <Button onClick={handleRetrySync} variant="primary" className="w-full text-lg">Force Re-Sync</Button>
-            <Button onClick={handleLogout} variant="ghost" className="w-full !border-white/10 !text-text-muted text-lg">Return to Security Hub</Button>
-          </div>
-        </Card>
-      </div>
-    );
-  }
+  if (session && !userProfile && syncError) return <AuthPage />;
 
   if (userProfile && 'is_verified' in userProfile && userProfile.is_verified === false) {
     return (
