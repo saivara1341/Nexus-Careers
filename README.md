@@ -23,8 +23,9 @@ View your app in AI Studio: https://ai.studio/apps/drive/1EoGgFqQZmyIpQnLccGNr5l
 
 Create both Web and native OAuth clients in Google Cloud. In Supabase Auth > Providers > Google, configure the Web client ID and secret. Add these redirect URLs in Supabase Auth URL configuration:
 
-- Web local/dev: `http://localhost:3000/auth/callback`
-- Web production: `https://your-domain.com/auth/callback`
+- Web local/dev: `http://localhost:3000/`
+- Web production: `https://your-domain.com/`
+- GitHub Pages production: `https://saivara1341.github.io/Nexus-Careers/`
 - Android app: `com.nexuscareers.platform://auth/callback`
 
 Keep the Google client IDs in `.env.local` using the keys shown in `.env.example`; client secrets must stay in Supabase/Google Cloud, not in the app bundle.
