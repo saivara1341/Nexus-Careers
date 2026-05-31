@@ -7,6 +7,7 @@ import PostCorporateJob from './PostCorporateJob.tsx';
 import CompanyProfilePage from './CompanyProfilePage.tsx';
 import CompanyPipelinePage from './CompanyPipelinePage.tsx';
 import CorporateTeams from './CorporateTeams.tsx';
+import CorporateERPPage from './CorporateERPPage.tsx';
 import { SupportSection } from '../../components/support/SupportSection.tsx';
 import { MFAOverlay } from '../../components/auth/MFAOverlay.tsx';
 import { Modal } from '../../components/ui/Modal.tsx';
@@ -22,7 +23,7 @@ interface CompanyDashboardProps {
   user: CompanyProfile;
 }
 
-type CompanyView = 'dashboard' | 'post-job' | 'profile' | 'pipeline' | 'teams' | 'support';
+type CompanyView = 'dashboard' | 'erp' | 'post-job' | 'profile' | 'pipeline' | 'teams' | 'support';
 
 const DEFAULT_EXPANDED_SIDEBAR_WIDTH = 260;
 const WIDGET_SIDEBAR_WIDTH = 70;
@@ -73,6 +74,7 @@ export const CompanyDashboard: React.FC<CompanyDashboardProps> = ({ onLogout, us
             if (command.type === 'NAVIGATE') {
                 const viewMap: Record<string, CompanyView> = {
                     'dashboard': 'dashboard',
+                    'erp': 'erp',
                     'post': 'post-job',
                     'post-job': 'post-job',
                     'teams': 'teams',
@@ -151,6 +153,7 @@ export const CompanyDashboard: React.FC<CompanyDashboardProps> = ({ onLogout, us
     const icons = {
         dashboard: <SvgIcon><path strokeLinecap="round" strokeLinejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" /></SvgIcon>,
         post: <SvgIcon><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></SvgIcon>,
+        erp: <SvgIcon><path strokeLinecap="round" strokeLinejoin="round" d="M9 17v-6m4 6V7m4 10v-4M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></SvgIcon>,
         teams: <SvgIcon><path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 1 1-6 0 3 3 0 0 1 6 0zm6 3a2 2 0 1 1-4 0 2 2 0 0 1 4 0zM7 10a2 2 0 1 1-4 0 2 2 0 0 1 4 0z" /></SvgIcon>,
         settings: <SvgIcon><path strokeLinecap="round" strokeLinejoin="round" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></SvgIcon>,
         support: <SvgIcon><path strokeLinecap="round" strokeLinejoin="round" d="M18.364 5.636l-3.536 3.536m0 5.656l3.536 3.536M9.172 9.172L5.636 5.636m3.536 9.192l-3.536 3.536M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0zm-5 0a4 4 0 1 1-8 0 4 4 0 0 1 8 0z" /></SvgIcon>
@@ -178,6 +181,7 @@ export const CompanyDashboard: React.FC<CompanyDashboardProps> = ({ onLogout, us
                     
                     <ul className="space-y-1.5 flex-grow overflow-y-auto px-3 py-4 custom-scrollbar">
                         <NavItem isSidebarCollapsed={isSidebarCollapsed} text="Overview" active={activeView === 'dashboard'} onClick={() => handleViewChange('dashboard')} icon={icons.dashboard} />
+                        <NavItem isSidebarCollapsed={isSidebarCollapsed} text="Corporate ERP" active={activeView === 'erp'} onClick={() => handleViewChange('erp')} icon={icons.erp} />
                         <NavItem isSidebarCollapsed={isSidebarCollapsed} text="Post Job" active={activeView === 'post-job'} onClick={() => handleViewChange('post-job')} icon={icons.post} />
                         <NavItem isSidebarCollapsed={isSidebarCollapsed} text="Teams" active={activeView === 'teams'} onClick={() => handleViewChange('teams')} icon={icons.teams} />
                         <NavItem isSidebarCollapsed={isSidebarCollapsed} text="Profile" active={activeView === 'profile'} onClick={() => handleViewChange('profile')} icon={icons.settings} />
@@ -221,6 +225,7 @@ export const CompanyDashboard: React.FC<CompanyDashboardProps> = ({ onLogout, us
     function renderView() {
         switch (activeView) {
             case 'post-job': return <PostCorporateJob user={user} onSuccess={() => setActiveView('dashboard')} onClose={() => setActiveView('dashboard')} />;
+            case 'erp': return <CorporateERPPage user={user} />;
             case 'profile': return <CompanyProfilePage user={user} onLogout={onLogout} />;
             case 'teams': return <CorporateTeams user={user} />;
             case 'support': return <SupportSection user={user} />;
