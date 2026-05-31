@@ -12,6 +12,7 @@ export function createSupabaseClient(supabaseUrl: string, supabasePublishableKey
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: true,
+      flowType: 'pkce',
     },
   });
 }

@@ -10,6 +10,8 @@ import { useQuery } from '@tanstack/react-query';
 import { Spinner } from '../components/ui/Spinner.tsx';
 import toast from 'react-hot-toast';
 import { useTheme } from '../hooks/useTheme.tsx';
+import { Browser } from '@capacitor/browser';
+import { getAuthRedirectUrl, isNativeApp } from '../utils/authRedirect.ts';
 
 const fetchDepartments = async (supabase, college: string): Promise<Department[]> => {
   const { data, error } = await supabase
@@ -74,6 +76,7 @@ const AuthPage: React.FC = () => {
   const [adminRole, setAdminRole] = useState<AdminRole>('Faculty');
 
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -172,6 +175,91 @@ const AuthPage: React.FC = () => {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const getGoogleMetadata = () => {
+    if (isLogin || isForgotPassword) return { auth_provider: 'google' };
+
+    const baseData: Record<string, any> = {
+      auth_provider: 'google',
+      full_name: fullName,
+      role: userType,
+      college,
+      is_verified: userType === 'student'
+    };
+
+    if (userType === 'student') {
+      baseData.roll_number = email ? email.split('@')[0] : undefined;
+    }
+
+    if (userType === 'admin') {
+      baseData.role = adminRole;
+      baseData.account_type = 'admin';
+      baseData.department = department === UNIVERSITY_ADMIN_DEPT ? null : department;
+    }
+
+    if (userType === 'company') {
+      baseData.role = 'company';
+      baseData.company_name = companyName || fullName;
+      baseData.industry = industry || 'Technology';
+      baseData.company_role = companyRole;
+      baseData.employee_id = employeeId;
+      baseData.is_verified = false;
+    }
+
+    return baseData;
+  };
+
+  const handleGoogleSignIn = async () => {
+    setGoogleLoading(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      if (!isLogin && !isForgotPassword && userType === 'company') {
+        const hasFounderProof = companyRole === 'Founder' && !!idFile;
+        const hasEmployeeInfo = companyRole !== 'Founder' && !!employeeId.trim();
+        if (!companyName.trim()) throw new Error('Corporate Identity is required before Google registration.');
+        if (!industry.trim()) throw new Error('Industry Sector is required before Google registration.');
+        if (!hasFounderProof && !hasEmployeeInfo) {
+          throw new Error(companyRole === 'Founder'
+            ? 'Proof of Incorporation is required before Google registration.'
+            : 'Employee ID is required before Google registration.');
+        }
+      }
+
+      if (!isLogin && !isForgotPassword && userType === 'admin' && !fullName.trim()) {
+        throw new Error('Full Name is required before Google registration.');
+      }
+
+      const metadata = getGoogleMetadata();
+      window.sessionStorage.setItem('nexus_google_profile_intent', JSON.stringify(metadata));
+
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: getAuthRedirectUrl(),
+          skipBrowserRedirect: isNativeApp(),
+          scopes: 'openid email profile',
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'select_account'
+          }
+        }
+      });
+
+      if (error) throw error;
+
+      if (isNativeApp()) {
+        if (!data.url) throw new Error('Google sign-in URL was not returned by Supabase.');
+        await Browser.open({ url: data.url, windowName: '_self' });
+      }
+    } catch (err: any) {
+      setError(err.message || 'Google sign-in failed.');
+      window.sessionStorage.removeItem('nexus_google_profile_intent');
+    } finally {
+      setGoogleLoading(false);
     }
   };
 
@@ -298,6 +386,36 @@ const AuthPage: React.FC = () => {
           <Button type="submit" className="w-full mt-6 text-lg" variant="primary" disabled={loading}>
             {loading ? <Spinner className="w-5 h-5" /> : isForgotPassword ? 'Transmit Signal' : 'Submit'}
           </Button>
+          {!isForgotPassword && (
+            <>
+              <div className="flex items-center gap-3 py-1">
+                <div className="h-px flex-1 bg-primary/20" />
+                <span className="text-[10px] font-bold uppercase tracking-[0.25em] text-text-muted">or</span>
+                <div className="h-px flex-1 bg-primary/20" />
+              </div>
+              <Button
+                type="button"
+                className="w-full text-base !bg-white !text-neutral-900 hover:!bg-neutral-100 border border-neutral-200 gap-3"
+                variant="ghost"
+                disabled={loading || googleLoading}
+                onClick={handleGoogleSignIn}
+              >
+                {googleLoading ? (
+                  <Spinner className="w-5 h-5" />
+                ) : (
+                  <>
+                    <span className="text-lg font-bold leading-none text-[#4285F4]">G</span>
+                    <span>Continue with Google</span>
+                  </>
+                )}
+              </Button>
+              {!isLogin && userType === 'admin' && (
+                <p className="text-[10px] text-text-muted text-center leading-relaxed">
+                  Google admin access still requires administrator provisioning after sign-in.
+                </p>
+              )}
+            </>
+          )}
           {error && <p className="text-red-400 text-center text-xs bg-red-500/10 p-2 rounded border border-red-500/20">{error}</p>}
           {message && <p className="text-green-400 text-center text-xs bg-green-500/10 p-2 rounded border border-green-500/20">{message}</p>}
         </form>
