@@ -629,12 +629,18 @@ const App: React.FC = () => {
   useEffect(() => {
     try {
       const env = import.meta.env;
-      const supabaseUrl = env.VITE_SUPABASE_URL || (window as any).NEXT_PUBLIC_SUPABASE_URL;
+      const runtimeEnv = window as any;
+      const supabaseUrl =
+        runtimeEnv.NEXT_PUBLIC_SUPABASE_URL ||
+        runtimeEnv.VITE_SUPABASE_URL ||
+        env.VITE_SUPABASE_URL;
       const supabasePublishableKey =
+        runtimeEnv.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+        runtimeEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+        runtimeEnv.VITE_SUPABASE_PUBLISHABLE_KEY ||
+        runtimeEnv.VITE_SUPABASE_ANON_KEY ||
         env.VITE_SUPABASE_PUBLISHABLE_KEY ||
-        env.VITE_SUPABASE_ANON_KEY ||
-        (window as any).NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-        (window as any).NEXT_PUBLIC_SUPABASE_ANON_KEY;
+        env.VITE_SUPABASE_ANON_KEY;
       if (!supabaseUrl || !supabasePublishableKey) throw new Error("Nexus Infrastructure values missing.");
       setSupabaseClient(createSupabaseClient(supabaseUrl, supabasePublishableKey));
     } catch (error: any) {
